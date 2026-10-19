@@ -1,0 +1,8 @@
+{
+  "name": "Yivi: PR title",
+  "description": "Enforce Conventional Commit PR titles.",
+  "iconName": "octicon checklist",
+  "categories": [
+    "Automation"
+  ]
+}

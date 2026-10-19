@@ -1,0 +1,11 @@
+{
+  "name": "Yivi: GHCR clean-up",
+  "description": "Delete unreferenced untagged image versions (dry run first).",
+  "iconName": "octicon trash",
+  "categories": [
+    "Docker"
+  ],
+  "filePatterns": [
+    "Dockerfile"
+  ]
+}

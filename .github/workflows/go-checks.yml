@@ -1,0 +1,271 @@
+# Reusable workflow: Go status checks.
+#
+# Matches the "analyze-go" / "test-go" jobs in the go-*-issuer repositories:
+# gofmt, `go fix` drift, golangci-lint v2, and tests (natively or via a
+# Dockerfile.test container for services that need e.g. Redis/Postgres).
+#
+# v1.1: govulncheck (reachability-aware Go vulnerability scan), `go mod tidy`
+# drift check, job timeouts and cancellation of superseded PR runs.
+
+name: Go checks
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: Directory that contains go.mod.
+        type: string
+        default: "."
+      go-version:
+        description: Go version. Leave empty to read it from go.mod.
+        type: string
+        default: ""
+      golangci-lint-version:
+        description: golangci-lint version (v2.x).
+        type: string
+        default: v2.12.2
+      golangci-lint-args:
+        description: Extra arguments for golangci-lint.
+        type: string
+        default: --timeout 5m
+      check-gofmt:
+        type: boolean
+        default: true
+      check-go-fix:
+        description: Fail when `go fix ./...` would change files.
+        type: boolean
+        default: true
+      lint:
+        type: boolean
+        default: true
+      check-go-mod-tidy:
+        description: Fail when `go mod tidy` would change go.mod / go.sum.
+        type: boolean
+        default: true
+      govulncheck:
+        description: Run govulncheck; fails on vulnerabilities in code that is actually called.
+        type: boolean
+        default: true
+      govulncheck-version:
+        type: string
+        default: v1.9.0
+      timeout-minutes:
+        type: number
+        default: 30
+      test-command:
+        description: Test command run natively. Ignored when test-dockerfile is set. Empty disables native tests.
+        type: string
+        default: go test -race -coverprofile=coverage.out ./...
+      # Set coverage-file: coverage.out to collect it.
+      test-dockerfile:
+        description: If set, tests run as `docker build -f <file> . && docker run <image>` from the repository root.
+        type: string
+        default: ""
+      apt-packages:
+        description: Space-separated apt packages needed to build (e.g. libpcsclite-dev).
+        type: string
+        default: ""
+      coverage-file:
+        description: >-
+          Coverage profile to collect. Native tests: path relative to working-directory.
+          Container tests: path inside the container; its directory is bind-mounted
+          from the runner (Dockerfile.test images write to /coverage/coverage.out).
+        type: string
+        default: ""
+      upload-coverage:
+        description: Upload the coverage file as a workflow artifact.
+        type: boolean
+        default: false
+      codecov:
+        description: Upload the coverage file to Codecov.
+        type: boolean
+        default: false
+      codecov-flags:
+        type: string
+        default: ""
+      codecov-fail-on-error:
+        type: boolean
+        default: true
+      runs-on:
+        type: string
+        default: ubuntu-latest
+    secrets:
+      CODECOV_TOKEN:
+        description: Needed for private repositories or when tokenless upload is disabled.
+        required: false
+
+permissions: {}
+
+jobs:
+  analyze:
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    concurrency:
+      group: go-analyze-${{ github.workflow }}-${{ inputs.working-directory }}-${{ github.ref }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ inputs.go-version }}
+          go-version-file: ${{ inputs.go-version == '' && format('{0}/go.mod', inputs.working-directory) || '' }}
+          cache-dependency-path: ${{ inputs.working-directory }}/go.sum
+
+      - name: Install system packages
+        if: inputs.apt-packages != ''
+        env:
+          PACKAGES: ${{ inputs.apt-packages }}
+        run: |
+          read -ra pkgs <<< "$PACKAGES"
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends "${pkgs[@]}"
+
+      - name: Check gofmt
+        if: inputs.check-gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::These files are not gofmt'ed:"; echo "$unformatted"; exit 1
+          fi
+
+      - name: Check go fix
+        if: inputs.check-go-fix
+        run: |
+          go fix ./...
+          git diff --exit-code -- . || { echo "::error::Run 'go fix ./...' and commit the result."; exit 1; }
+
+      - name: Check go mod tidy
+        if: inputs.check-go-mod-tidy
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum || { echo "::error::Run 'go mod tidy' and commit the result."; exit 1; }
+
+      - name: golangci-lint
+        if: inputs.lint
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: ${{ inputs.golangci-lint-version }}
+          working-directory: ${{ inputs.working-directory }}
+          args: ${{ inputs.golangci-lint-args }}
+
+  govulncheck:
+    if: inputs.govulncheck
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    concurrency:
+      group: go-vuln-${{ github.workflow }}-${{ inputs.working-directory }}-${{ github.ref }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ inputs.go-version }}
+          go-version-file: ${{ inputs.go-version == '' && format('{0}/go.mod', inputs.working-directory) || '' }}
+          cache-dependency-path: ${{ inputs.working-directory }}/go.sum
+
+      - name: Install system packages
+        if: inputs.apt-packages != ''
+        env:
+          PACKAGES: ${{ inputs.apt-packages }}
+        run: |
+          read -ra pkgs <<< "$PACKAGES"
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends "${pkgs[@]}"
+
+      - name: govulncheck
+        env:
+          VERSION: ${{ inputs.govulncheck-version }}
+        # `go run pkg@version` is verified against the Go checksum database.
+        run: go run "golang.org/x/vuln/cmd/govulncheck@${VERSION}" ./...
+
+  test:
+    if: inputs.test-dockerfile != '' || inputs.test-command != ''
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    concurrency:
+      group: go-test-${{ github.workflow }}-${{ inputs.working-directory }}-${{ github.ref }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Test in container
+        if: inputs.test-dockerfile != ''
+        id: container-test
+        env:
+          DOCKERFILE: ${{ inputs.test-dockerfile }}
+          COVERAGE_FILE: ${{ inputs.coverage-file }}
+        run: |
+          set -euo pipefail
+          docker build --tag ci-tests --file "$DOCKERFILE" .
+          args=(--rm)
+          if [ -n "$COVERAGE_FILE" ]; then
+            host_dir="$RUNNER_TEMP/coverage"
+            mkdir -p "$host_dir"; chmod 777 "$host_dir"
+            args+=(-v "$host_dir:$(dirname "$COVERAGE_FILE")")
+            echo "coverage=$host_dir/$(basename "$COVERAGE_FILE")" >> "$GITHUB_OUTPUT"
+          fi
+          docker run "${args[@]}" ci-tests
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        if: inputs.test-dockerfile == ''
+        with:
+          go-version: ${{ inputs.go-version }}
+          go-version-file: ${{ inputs.go-version == '' && format('{0}/go.mod', inputs.working-directory) || '' }}
+          cache-dependency-path: ${{ inputs.working-directory }}/go.sum
+
+      - name: Install system packages
+        if: inputs.test-dockerfile == '' && inputs.apt-packages != ''
+        env:
+          PACKAGES: ${{ inputs.apt-packages }}
+        run: |
+          read -ra pkgs <<< "$PACKAGES"
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends "${pkgs[@]}"
+
+      - name: Test
+        id: native-test
+        if: inputs.test-dockerfile == ''
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          TEST_COMMAND: ${{ inputs.test-command }}
+          COVERAGE_FILE: ${{ inputs.coverage-file }}
+          WD: ${{ inputs.working-directory }}
+        run: |
+          bash -euo pipefail -c "$TEST_COMMAND"
+          [ -n "$COVERAGE_FILE" ] && echo "coverage=$WD/$COVERAGE_FILE" >> "$GITHUB_OUTPUT"
+          true
+
+      - name: Upload coverage artifact
+        if: inputs.upload-coverage && (steps.container-test.outputs.coverage || steps.native-test.outputs.coverage)
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage
+          path: ${{ steps.container-test.outputs.coverage || steps.native-test.outputs.coverage }}
+          if-no-files-found: error
+
+      - name: Upload coverage to Codecov
+        if: inputs.codecov && (steps.container-test.outputs.coverage || steps.native-test.outputs.coverage)
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          files: ${{ steps.container-test.outputs.coverage || steps.native-test.outputs.coverage }}
+          flags: ${{ inputs.codecov-flags }}
+          fail_ci_if_error: ${{ inputs.codecov-fail-on-error }}
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}

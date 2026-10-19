@@ -1,0 +1,320 @@
+# Reusable workflow: cross-compile a Go binary and attach it to a GitHub release.
+#
+# Generalises irmago's `build-release-artifact` job (static CGO_ENABLED=0
+# builds for linux/darwin/windows x amd64/386/arm/arm64) and adds checksums,
+# an SBOM and build-provenance / SBOM attestations.
+#
+# v1.1 - compatible with GitHub *immutable releases*:
+#   Recommended trigger: `push: tags: ['v*']`.
+#     1. build all targets + SBOM + checksums
+#     2. use the existing DRAFT release for the tag (e.g. made by release-please
+#        with "draft": true), or create a draft with generated notes
+#     3. upload the assets to the draft
+#     4. publish it. Pass RELEASE_APP_ID / RELEASE_APP_PRIVATE_KEY so it is
+#        published with an App token and `release: published` workflows
+#        (e.g. Delivery) are triggered; GITHUB_TOKEN events don't trigger them.
+#   Legacy trigger: `release: types: [published]` still works, but only for
+#   repositories WITHOUT immutable releases (assets are added after publishing).
+#   pull_request / other events: build only (smoke test).
+#
+# Releases are refused when the tagged commit is not on the default branch.
+#
+# Required caller permissions:
+#   contents: write, id-token: write, attestations: write
+
+name: Go release
+
+on:
+  workflow_call:
+    inputs:
+      binary-name:
+        description: Base name of the produced binaries (e.g. yivi).
+        type: string
+        required: true
+      main-package:
+        description: Package to build (e.g. ./yivi or ./cmd/server).
+        type: string
+        default: "."
+      working-directory:
+        description: Directory that contains go.mod.
+        type: string
+        default: "."
+      targets:
+        description: JSON list of {"goos","goarch"} objects to build.
+        type: string
+        default: >-
+          [
+            {"goos":"linux","goarch":"amd64"},{"goos":"linux","goarch":"386"},
+            {"goos":"linux","goarch":"arm"},{"goos":"linux","goarch":"arm64"},
+            {"goos":"darwin","goarch":"amd64"},{"goos":"darwin","goarch":"arm64"},
+            {"goos":"windows","goarch":"amd64"},{"goos":"windows","goarch":"386"},
+            {"goos":"windows","goarch":"arm64"}
+          ]
+      ldflags:
+        description: Extra -ldflags.
+        type: string
+        default: -s -w -extldflags "-static"
+      version-variable:
+        description: Optional Go variable to stamp with the release version, e.g. main.version.
+        type: string
+        default: ""
+      require-changelog-entry:
+        description: Fail the release when CHANGELOG.md has no "[x.y.z]" entry for this version.
+        type: boolean
+        default: false
+      require-release-on-default-branch:
+        description: Refuse to release a tag whose commit is not on the default branch.
+        type: boolean
+        default: true
+      sbom:
+        description: Attach an SPDX SBOM of the module to the release.
+        type: boolean
+        default: true
+      attest:
+        description: Create build-provenance and SBOM attestations (public repositories only).
+        type: boolean
+        default: true
+      timeout-minutes:
+        type: number
+        default: 30
+    secrets:
+      RELEASE_APP_ID:
+        description: "GitHub App used to publish the draft, so that release-published workflows run."
+        required: false
+      RELEASE_APP_PRIVATE_KEY:
+        required: false
+
+permissions: {}
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      mode: ${{ steps.version.outputs.mode }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Determine version and release mode
+        id: version
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          mode=build; tag=""
+          if [ "$EVENT" = release ]; then mode=legacy; tag="$RELEASE_TAG"
+          elif [ "$EVENT" = push ] && [[ "$REF" == refs/tags/* ]]; then mode=draft; tag="${REF#refs/tags/}"
+          fi
+          if [ -n "$tag" ]; then v="${tag#v}"; else v="0.0.0-dev+${SHA::12}"; fi
+          prerelease=false; [[ "$v" == *-* ]] && prerelease=true
+          {
+            echo "mode=$mode"; echo "tag=$tag"; echo "version=$v"; echo "prerelease=$prerelease"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Check release commit is on the default branch
+        if: steps.version.outputs.mode != 'build' && inputs.require-release-on-default-branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          SHA: ${{ github.sha }}
+        run: |
+          status="$(gh api "repos/${REPO}/compare/${DEFAULT_BRANCH}...${SHA}" --jq .status)"
+          case "$status" in
+            behind|identical) ;;
+            *) echo "::error::Release commit ${SHA} is not on ${DEFAULT_BRANCH} (compare status: ${status})."; exit 1 ;;
+          esac
+
+      - name: Check CHANGELOG.md
+        if: inputs.require-changelog-entry && steps.version.outputs.mode != 'build'
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: grep -qF "[${VERSION}]" CHANGELOG.md || { echo "::error::CHANGELOG.md has no entry for [${VERSION}]"; exit 1; }
+
+  build:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: true
+      matrix:
+        include: ${{ fromJSON(inputs.targets) }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: ${{ inputs.working-directory }}/go.mod
+          cache-dependency-path: ${{ inputs.working-directory }}/go.sum
+
+      - name: Build
+        id: build
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+          NAME: ${{ inputs.binary-name }}
+          PKG: ${{ inputs.main-package }}
+          LDFLAGS: ${{ inputs.ldflags }}
+          VERSION_VAR: ${{ inputs.version-variable }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          out="${NAME}-${GOOS}-${GOARCH}"
+          [ "$GOOS" = windows ] && out="${out}.exe"
+          flags="$LDFLAGS"
+          [ -n "$VERSION_VAR" ] && flags="$flags -X ${VERSION_VAR}=${VERSION}"
+          mkdir -p "$RUNNER_TEMP/dist"
+          # -trimpath + embedded VCS info: reproducible binaries.
+          go build -trimpath -buildvcs=true -ldflags "$flags" -o "$RUNNER_TEMP/dist/$out" "$PKG"
+          echo "file=$out" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bin-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: ${{ runner.temp }}/dist/${{ steps.build.outputs.file }}
+          if-no-files-found: error
+
+  sbom:
+    needs: prepare
+    if: inputs.sbom
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Generate SBOM
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          path: ${{ inputs.working-directory }}
+          format: spdx-json
+          output-file: ${{ runner.temp }}/${{ inputs.binary-name }}.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sbom
+          path: ${{ runner.temp }}/${{ inputs.binary-name }}.spdx.json
+          if-no-files-found: error
+
+  publish:
+    needs: [prepare, build, sbom]
+    if: ${{ !cancelled() && needs.prepare.outputs.mode != 'build' && needs.build.result == 'success' && needs.sbom.result != 'failure' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    concurrency:
+      group: go-release-${{ github.repository }}-${{ needs.prepare.outputs.tag }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: bin-*
+          merge-multiple: true
+          path: dist
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: inputs.sbom
+        with:
+          name: sbom
+          path: sbom
+
+      # Attest the binaries' SBOM before the checksums/SBOM files are added to dist/.
+      - name: Attest SBOM
+        if: inputs.attest && inputs.sbom && !github.event.repository.private
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-path: dist/*
+          sbom-path: sbom/${{ inputs.binary-name }}.spdx.json
+
+      - name: Generate checksums
+        env:
+          NAME: ${{ inputs.binary-name }}
+        run: |
+          set -euo pipefail
+          if [ -d sbom ]; then cp sbom/* dist/; fi
+          cd dist && sha256sum -- * > "${NAME}-checksums.txt"
+
+      - name: Attest build provenance
+        if: inputs.attest && !github.event.repository.private
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*
+
+      - name: Check for GitHub App
+        id: app
+        env:
+          APP_ID: ${{ secrets.RELEASE_APP_ID }}
+        run: echo "enabled=$([ -n "$APP_ID" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub App token
+        id: app-token
+        if: steps.app.outputs.enabled == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+
+      - name: Upload assets and publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUBLISH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+          HAS_APP: ${{ steps.app.outputs.enabled }}
+          MODE: ${{ needs.prepare.outputs.mode }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          immutable_hint="If immutable releases are enabled, trigger this workflow on 'push: tags' and let it publish the draft."
+
+          if [ "$MODE" = legacy ]; then
+            gh release upload "$TAG" dist/* --clobber --repo "$REPO" \
+              || { echo "::error::Could not add assets to the published release ${TAG}. ${immutable_hint}"; exit 1; }
+            exit 0
+          fi
+
+          # MODE=draft (tag push)
+          if ! state="$(gh release view "$TAG" --repo "$REPO" --json isDraft --jq .isDraft 2>/dev/null)"; then
+            args=(--draft --verify-tag --generate-notes --title "$TAG")
+            [ "$PRERELEASE" = true ] && args+=(--prerelease)
+            gh release create "$TAG" --repo "$REPO" "${args[@]}"
+            state=true
+          fi
+
+          if [ "$state" != true ]; then
+            echo "::warning::Release ${TAG} is already published; trying to add assets."
+            gh release upload "$TAG" dist/* --clobber --repo "$REPO" \
+              || { echo "::error::Could not add assets to the published release ${TAG}. ${immutable_hint}"; exit 1; }
+            exit 0
+          fi
+
+          gh release upload "$TAG" dist/* --clobber --repo "$REPO"
+          [ "$HAS_APP" = true ] || echo "::warning::Publishing with GITHUB_TOKEN: 'release: published' workflows will NOT be triggered. Pass RELEASE_APP_ID/RELEASE_APP_PRIVATE_KEY."
+          GH_TOKEN="$PUBLISH_TOKEN" gh release edit "$TAG" --repo "$REPO" --draft=false
+          echo "### Published release ${TAG}" >> "$GITHUB_STEP_SUMMARY"

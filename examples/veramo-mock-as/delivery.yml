@@ -1,0 +1,53 @@
+# veramo-mock-as: Delivery (shared workflows v1.1).
+# Replaces .github/workflows/docker.yml (push to main part).
+#
+# The repository has no releases; today every push to main publishes
+# :latest and :sha-<short>. The shared workflow publishes :edge instead, so
+# the compat job below adds :latest and :sha-<short> to the SAME digest
+# (no rebuild) until consumers have moved to :edge. Remove it afterwards.
+name: Delivery
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  docker:
+    uses: privacybydesign/github-workflows/.github/workflows/docker-publish.yml@v1
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+      id-token: write
+      attestations: write
+    with:
+      platforms: linux/amd64,linux/arm64
+
+  compat-tags:
+    needs: docker
+    if: needs.docker.outputs.published == 'true' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      packages: write
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Add :latest and :sha-<short> to the published digest
+        env:
+          IMAGE: ${{ needs.docker.outputs.image }}
+          DIGEST: ${{ needs.docker.outputs.digest }}
+          SHA: ${{ github.sha }}
+        run: |
+          docker buildx imagetools create \
+            --tag "${IMAGE}:latest" \
+            --tag "${IMAGE}:sha-${SHA::7}" \
+            "${IMAGE}@${DIGEST}"

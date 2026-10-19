@@ -1,0 +1,333 @@
+# Reusable workflow: Terraform fmt / validate / tflint / plan / apply.
+#
+#   pull_request  -> fmt, validate, tflint, plan; plan posted as a PR comment
+#   push (default branch) with `apply: true`
+#                 -> plan, then apply that exact plan in a protected
+#                    GitHub Environment (configure required reviewers there)
+#   schedule      -> drift detection: plan, fail when real infrastructure
+#                    differs from the code (fail-on-drift)
+#   anything else -> checks + plan only
+#
+# v1.1: Checkov security scan (IaC misconfigurations), drift detection,
+# pinned tflint version, job timeouts.
+#
+# Provider/backend credentials are passed as a multi-line `TF_ENV` secret of
+# KEY=VALUE lines (e.g. ARM_CLIENT_ID=..., AWS_ROLE_ARN=..., HCLOUD_TOKEN=...,
+# TF_VAR_foo=...). Each value is masked and exported for every Terraform step.
+# `id-token: write` is granted so providers that support GitHub OIDC
+# (azurerm ARM_USE_OIDC=true, aws assume_role_with_web_identity, GCP WIF)
+# work without long-lived secrets.
+#
+# Run several root modules by calling this workflow from a matrix over
+# `working-directory`.
+#
+# Required caller permissions:
+#   contents: read, pull-requests: write, id-token: write
+
+name: Terraform
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: Terraform root module.
+        type: string
+        default: "."
+      terraform-version:
+        description: Terraform version constraint. Empty = read .terraform-version / required_version, else latest.
+        type: string
+        default: ""
+      backend-config:
+        description: Optional path (relative to working-directory) of a backend config file for `terraform init`.
+        type: string
+        default: ""
+      var-file:
+        description: Optional .tfvars file (relative to working-directory).
+        type: string
+        default: ""
+      tflint:
+        type: boolean
+        default: true
+      tflint-version:
+        type: string
+        default: v0.64.0
+      checkov:
+        description: Checkov IaC security scan. error, warn or off.
+        type: string
+        default: warn
+      checkov-version:
+        type: string
+        default: 3.3.29
+      checkov-skip-checks:
+        description: Comma-separated Checkov check IDs to skip (e.g. CKV_AWS_20).
+        type: string
+        default: ""
+      fail-on-drift:
+        description: On scheduled runs, fail when the plan is not empty.
+        type: boolean
+        default: true
+      timeout-minutes:
+        type: number
+        default: 30
+      plan:
+        description: Run terraform plan (needs credentials).
+        type: boolean
+        default: true
+      apply:
+        description: Apply the plan on pushes to the default branch.
+        type: boolean
+        default: false
+      environment:
+        description: GitHub Environment that gates apply (configure required reviewers there).
+        type: string
+        default: production
+      runs-on:
+        type: string
+        default: ubuntu-latest
+    secrets:
+      TF_ENV:
+        description: Newline-separated KEY=VALUE pairs exported to Terraform steps.
+        required: false
+
+permissions: {}
+
+jobs:
+  plan:
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+    concurrency:
+      # Per event + ref: a drift run or merge-queue run never cancels a pending push plan.
+      # Concurrent access to the state itself is serialised by Terraform's lock (-lock-timeout).
+      group: terraform-${{ github.repository }}-${{ inputs.working-directory }}-${{ github.event_name }}-${{ github.ref }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    outputs:
+      has-changes: ${{ steps.plan.outputs.has-changes }}
+      artifact: ${{ steps.slug.outputs.artifact }}
+    env:
+      TF_IN_AUTOMATION: "true"
+      TF_INPUT: "false"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Artifact name
+        id: slug
+        env:
+          DIR: ${{ inputs.working-directory }}
+          ATTEMPT: ${{ github.run_attempt }}
+        run: echo "artifact=tfplan-$(echo "$DIR" | tr -c 'A-Za-z0-9\n' '-')-${ATTEMPT}" >> "$GITHUB_OUTPUT"
+
+      - name: Export TF_ENV
+        env:
+          TF_ENV: ${{ secrets.TF_ENV }}
+        run: |
+          [ -z "$TF_ENV" ] && exit 0
+          while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            case "$line" in \#*) continue ;; esac
+            key="${line%%=*}"; value="${line#*=}"
+            echo "::add-mask::$value"
+            echo "$key=$value" >> "$GITHUB_ENV"
+          done <<< "$TF_ENV"
+
+      - name: Resolve Terraform version
+        id: tfver
+        env:
+          INPUT_VERSION: ${{ inputs.terraform-version }}
+        run: |
+          v="$INPUT_VERSION"
+          [ -z "$v" ] && [ -f .terraform-version ] && v="$(tr -d ' \n' < .terraform-version)"
+          echo "version=${v:-latest}" >> "$GITHUB_OUTPUT"
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ steps.tfver.outputs.version }}
+          terraform_wrapper: false
+
+      - name: terraform fmt
+        run: terraform fmt -check -recursive -diff
+
+      - name: terraform init
+        env:
+          BACKEND_CONFIG: ${{ inputs.backend-config }}
+          PLAN: ${{ inputs.plan }}
+        run: |
+          args=()
+          [ -n "$BACKEND_CONFIG" ] && args+=("-backend-config=$BACKEND_CONFIG")
+          # Without credentials (plan: false) validate against a local backend.
+          [ "$PLAN" != "true" ] && args+=(-backend=false)
+          terraform init "${args[@]}"
+
+      - name: terraform validate
+        run: terraform validate -no-color
+
+      - uses: terraform-linters/setup-tflint@6ffdbaa3be476b3431f7275c26966ef32ff60337 # v6.3.2
+        if: inputs.tflint
+        with:
+          tflint_version: ${{ inputs.tflint-version }}
+
+      - name: tflint
+        if: inputs.tflint
+        env:
+          GITHUB_TOKEN: ${{ github.token }} # avoids rate limits when downloading plugins
+        run: |
+          tflint --init
+          tflint --format compact --recursive
+
+      - name: Checkov
+        if: inputs.checkov != 'off'
+        continue-on-error: ${{ inputs.checkov != 'error' }}
+        env:
+          VERSION: ${{ inputs.checkov-version }}
+          SKIP: ${{ inputs.checkov-skip-checks }}
+        run: |
+          args=(-d . --framework terraform --compact --quiet)
+          [ -n "$SKIP" ] && args+=(--skip-check "$SKIP")
+          pipx run --spec "checkov==${VERSION}" checkov "${args[@]}"
+
+      - name: terraform plan
+        id: plan
+        if: inputs.plan
+        env:
+          VAR_FILE: ${{ inputs.var-file }}
+        run: |
+          set +e
+          args=(-detailed-exitcode -no-color -lock-timeout=5m -out=tfplan)
+          [ -n "$VAR_FILE" ] && args+=("-var-file=$VAR_FILE")
+          terraform plan "${args[@]}" > plan.log 2>&1
+          code=$?
+          cat plan.log
+          set -e
+          [ "$code" -eq 1 ] && exit 1
+          echo "has-changes=$([ "$code" -eq 2 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          terraform show -no-color tfplan > plan.txt
+
+      - name: Drift detection
+        if: github.event_name == 'schedule' && inputs.plan && inputs.fail-on-drift && steps.plan.outputs.has-changes == 'true'
+        env:
+          DIR: ${{ inputs.working-directory }}
+        run: |
+          {
+            echo "### Drift detected in \`${DIR}\`"
+            echo '```'
+            grep -E '^\s+[-+~]|will be|must be replaced|Plan:' plan.txt | head -100 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::error::Infrastructure in ${DIR} differs from the code (drift). See the job summary."
+          exit 1
+
+      - name: Comment plan on PR
+        if: github.event_name == 'pull_request' && inputs.plan && !cancelled() && steps.plan.outcome != 'skipped'
+        continue-on-error: true # fork PRs have a read-only token
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          DIR: ${{ inputs.working-directory }}
+          OUTCOME: ${{ steps.plan.outcome }}
+          CHANGES: ${{ steps.plan.outputs.has-changes }}
+        run: |
+          marker="<!-- terraform-plan:${DIR} -->"
+          src=plan.txt; [ -f "$src" ] || src=plan.log
+          {
+            echo "$marker"
+            echo "#### Terraform plan for \`${DIR}\`: ${OUTCOME} $([ "$CHANGES" = true ] && echo '(changes)' || echo '(no changes)')"
+            echo '<details><summary>Show plan</summary>'
+            echo; echo '```hcl'
+            tail -c 60000 "$src"
+            echo '```'; echo '</details>'
+          } > comment.md
+          id="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments" --paginate \
+                --jq ".[] | select(.body | startswith(\"${marker}\")) | .id" | tail -1)"
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${id}" -F body=@comment.md >/dev/null
+          else
+            gh pr comment "$PR" --body-file comment.md
+          fi
+
+      - name: Upload plan
+        if: inputs.apply && inputs.plan && github.event_name == 'push' && github.ref_name == github.event.repository.default_branch && steps.plan.outputs.has-changes == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          # Plans can contain secrets: keep them only as long as an approval may take.
+          # The lock file pins the provider versions the plan was made with.
+          name: ${{ steps.slug.outputs.artifact }}
+          path: |
+            ${{ inputs.working-directory }}/tfplan
+            ${{ inputs.working-directory }}/.terraform.lock.hcl
+          include-hidden-files: true
+          retention-days: 7
+          if-no-files-found: error
+
+  apply:
+    needs: plan
+    if: inputs.apply && inputs.plan && github.event_name == 'push' && github.ref_name == github.event.repository.default_branch && needs.plan.outputs.has-changes == 'true'
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: read
+      id-token: write
+    concurrency:
+      group: terraform-apply-${{ github.repository }}-${{ inputs.working-directory }}
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    env:
+      TF_IN_AUTOMATION: "true"
+      TF_INPUT: "false"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Export TF_ENV
+        env:
+          TF_ENV: ${{ secrets.TF_ENV }}
+        run: |
+          [ -z "$TF_ENV" ] && exit 0
+          while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            case "$line" in \#*) continue ;; esac
+            key="${line%%=*}"; value="${line#*=}"
+            echo "::add-mask::$value"
+            echo "$key=$value" >> "$GITHUB_ENV"
+          done <<< "$TF_ENV"
+
+      - name: Resolve Terraform version
+        id: tfver
+        env:
+          INPUT_VERSION: ${{ inputs.terraform-version }}
+        run: |
+          v="$INPUT_VERSION"
+          [ -z "$v" ] && [ -f .terraform-version ] && v="$(tr -d ' \n' < .terraform-version)"
+          echo "version=${v:-latest}" >> "$GITHUB_OUTPUT"
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ steps.tfver.outputs.version }}
+          terraform_wrapper: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ needs.plan.outputs.artifact }}
+          path: ${{ inputs.working-directory }}
+
+      - name: terraform init
+        env:
+          BACKEND_CONFIG: ${{ inputs.backend-config }}
+        run: |
+          args=()
+          [ -n "$BACKEND_CONFIG" ] && args+=("-backend-config=$BACKEND_CONFIG")
+          terraform init "${args[@]}"
+
+      - name: terraform apply
+        run: terraform apply -no-color -lock-timeout=5m tfplan

@@ -1,0 +1,63 @@
+# Changelog
+
+## v1.1.0
+
+All changes are backwards compatible for `@v1` callers: new inputs default
+to the v1.0 behaviour unless noted. New checks that can fail a build are
+marked ⚠.
+
+### New reusable workflows
+- `codeql.yml`: CodeQL (`security-extended`) for Go, JS/TS and GitHub Actions.
+- `dependency-review.yml`: blocks PRs that add vulnerable (≥ high) or disallowed-licence dependencies.
+- `workflow-lint.yml`: actionlint + zizmor for any repository.
+- `image-rescan.yml`: weekly scan of the published image tags, every platform.
+- `ghcr-cleanup.yml`: GHCR retention; never deletes manifests or referrers that a kept tag needs; dry run by default.
+
+### docker-publish.yml
+- `push-image: false` to build + scan only (PR checks in Status checks).
+- Push of a `v*` tag is handled like a published release.
+- ⚠ Releases whose commit is not on the default branch are refused (`require-release-on-default-branch`).
+- `docker build --check` (`dockerfile-check: warn`) and base-image digest pinning check (`base-image-pinning: warn`).
+- Reproducible images: `SOURCE_DATE_EPOCH` = commit time + `rewrite-timestamp` (same commit → same digest).
+- Optional keyless cosign signing (`cosign: true`).
+- Per-ref concurrency: a pending release run is never cancelled by a later push.
+- `timeout-minutes` (60).
+
+### go-checks.yml
+- ⚠ `govulncheck` job (`govulncheck: true`).
+- ⚠ `go mod tidy` drift check (`check-go-mod-tidy: true`).
+- Timeouts and cancellation of superseded PR runs.
+
+### go-release.yml
+- Works with **immutable releases**: on a `v*` tag push it uploads to a draft (existing or new) and then publishes it, with the release App token when given so `release: published` workflows still run.
+- `release: published` trigger still supported for repos without immutable releases.
+- SPDX SBOM attached to the release + SBOM attestation (`sbom: true`).
+- ⚠ Release commit must be on the default branch.
+- `-trimpath -buildvcs=true` for reproducible binaries.
+
+### node-checks.yml
+- `ignore-scripts` + `allowed-scripts`: install without dependency lifecycle scripts (default off in v1.x, on in the templates).
+- Timeouts and cancellation of superseded PR runs.
+
+### npm-publish.yml
+- ⚠ Release commit must be on the default branch (tag-driven mode).
+
+### terraform.yml
+- Checkov IaC scan (`checkov: warn`).
+- ⚠ Drift detection on `schedule` runs (`fail-on-drift: true`).
+- tflint version pinned (`tflint-version: v0.64.0`, was `latest`).
+
+### Fixes
+- docker-publish: `tags` output lists only tags that were actually pushed; GHA cache scope and SARIF category are unique per image/Dockerfile/context (matrix callers no longer overwrite each other).
+- terraform: the saved plan is kept 7 days (approval window) together with `.terraform.lock.hcl`; concurrency is per event + ref, so drift or merge-queue runs never cancel a pending push plan.
+- workflow-lint: `actionlint-paths` to lint workflow files outside `.github/workflows` (used by this repo for templates and examples).
+
+### Templates and org settings
+- Status checks templates for Go and Node with one required gate job, **`Status checks passed`**, and `merge_group` triggers.
+- Delivery template: PR scanning moved to Status checks, the weekly schedule moved to Image rescan.
+- New templates: image rescan, GHCR clean-up, OpenSSF Scorecard; Go release template uses tag push.
+- `templates/dependabot.yml` (actions, Docker digests, Go, npm, Terraform; grouped; 7-day cooldown).
+- `org-settings/`: allowed actions, rulesets, security configuration, apply script with `baseline`, `opt-in` and `strict` phases.
+
+## v1.0.0
+- Initial release: docker-publish, go-checks, go-release, node-checks, npm-publish, terraform, pr-title, release-please.

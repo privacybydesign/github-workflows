@@ -1,0 +1,203 @@
+# Reusable workflow: GHCR retention clean-up.
+#
+# Deletes container package versions that nothing references any more:
+#   * untagged versions (e.g. a previous :edge build) older than min-age-days,
+#   * optionally, tagged versions whose tags ALL match delete-tags-regex
+#     (e.g. branch tags from manual runs) and that are older than tag-max-age-days,
+#   * signature/attestation tags (sha256-<digest>[.sig|.att]) whose subject is gone.
+#
+# It never deletes anything that a kept tag still needs: the platform
+# manifests and BuildKit attestation manifests inside a multi-arch index show
+# up in GHCR as separate *untagged* versions, and deleting them would break
+# the tagged image. Those (and referrers pointing at kept images) are
+# resolved from the registry and protected.
+#
+# Dry-run by default: review the job summary, then set dry-run: false.
+#
+# Token: GITHUB_TOKEN works when this repository has the *Admin* role on the
+# package (package settings > Manage Actions access). Otherwise pass a
+# classic PAT with read:packages + delete:packages as PACKAGES_TOKEN.
+#
+# Required caller permissions: contents: read, packages: write
+
+name: GHCR clean-up
+
+on:
+  workflow_call:
+    inputs:
+      package-name:
+        description: Container package name (e.g. go-sms-issuer or yivi-portal/react). Defaults to the repository name.
+        type: string
+        default: ""
+      dry-run:
+        type: boolean
+        default: true
+      min-age-days:
+        description: Only delete untagged versions older than this.
+        type: number
+        default: 14
+      delete-tags-regex:
+        description: Tagged versions are deleted when ALL their tags fully match this regex. Empty = never delete tagged versions.
+        type: string
+        default: ""
+      tag-max-age-days:
+        type: number
+        default: 90
+      max-deletions:
+        description: Safety limit; the job fails instead of deleting more than this.
+        type: number
+        default: 200
+    secrets:
+      PACKAGES_TOKEN:
+        required: false
+
+permissions: {}
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    concurrency:
+      group: ghcr-cleanup-${{ github.repository }}-${{ inputs.package-name }}
+      cancel-in-progress: false
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.PACKAGES_TOKEN || github.token }}
+
+      - name: Install skopeo
+        run: command -v skopeo >/dev/null || { sudo apt-get update && sudo apt-get install -y --no-install-recommends skopeo; }
+
+      - name: Clean up
+        env:
+          GH_TOKEN: ${{ secrets.PACKAGES_TOKEN || github.token }}
+          OWNER: ${{ github.repository_owner }}
+          PACKAGE: ${{ inputs.package-name }}
+          DRY_RUN: ${{ inputs.dry-run }}
+          MIN_AGE_DAYS: ${{ inputs.min-age-days }}
+          DELETE_TAGS_REGEX: ${{ inputs.delete-tags-regex }}
+          TAG_MAX_AGE_DAYS: ${{ inputs.tag-max-age-days }}
+          MAX_DELETIONS: ${{ inputs.max-deletions }}
+        shell: python3 {0}
+        run: |
+          import datetime, json, os, re, subprocess, sys, urllib.parse
+
+          env = os.environ
+          owner = env["OWNER"]
+          # schedule events carry no repository payload: derive everything from GITHUB_REPOSITORY.
+          package = (env.get("PACKAGE") or env["GITHUB_REPOSITORY"].split("/", 1)[1]).lower()
+          image = f"{env.get('REGISTRY', 'ghcr.io')}/{owner.lower()}/{package}"
+          dry_run = env["DRY_RUN"] == "true"
+          min_age = int(float(env["MIN_AGE_DAYS"]))
+          tag_re = env.get("DELETE_TAGS_REGEX", "")
+          tag_age = int(float(env["TAG_MAX_AGE_DAYS"]))
+          max_del = int(float(env["MAX_DELETIONS"]))
+          owner_type = subprocess.run(["gh", "api", f"users/{owner}", "--jq", ".type"],
+                                      check=True, capture_output=True, text=True).stdout.strip()
+          scope = "orgs" if owner_type == "Organization" else "users"
+          base = f"/{scope}/{owner}/packages/container/{urllib.parse.quote(package, safe='')}/versions"
+          ref_tag = re.compile(r"^sha256-([0-9a-f]{64})(\.[a-z]+)?$")
+          summary = open(env.get("GITHUB_STEP_SUMMARY", "/dev/null"), "a")
+
+          def gh(*args):
+              return subprocess.run(["gh", "api", *args], check=True, capture_output=True, text=True).stdout
+
+          pages = json.loads(gh("--paginate", "--slurp", f"{base}?per_page=100"))
+          versions = [v for page in pages for v in page]
+          now = datetime.datetime.now(datetime.timezone.utc)
+
+          def age(v):
+              return (now - datetime.datetime.fromisoformat(v["created_at"].replace("Z", "+00:00"))).days
+
+          _cache = {}
+          unreadable = set()   # never delete what we could not inspect
+          def manifest(digest, required):
+              if digest not in _cache:
+                  r = subprocess.run(["skopeo", "inspect", "--raw", f"docker://{image}@{digest}"],
+                                     capture_output=True, text=True)
+                  _cache[digest] = json.loads(r.stdout) if r.returncode == 0 else None
+              if _cache[digest] is None:
+                  if required:
+                      sys.exit(f"::error::Cannot read manifest {digest} of a kept image; aborting to stay safe.")
+                  unreadable.add(digest)
+              return _cache[digest] or {}
+
+          tags_of = {v["name"]: v["metadata"]["container"]["tags"] for v in versions}
+          delete, roots, ref_versions = {}, [], []
+          for v in versions:
+              tags = tags_of[v["name"]]
+              if not tags:
+                  continue
+              if all(ref_tag.match(t) for t in tags):
+                  ref_versions.append(v)              # decided once the protected set is known
+              elif tag_re and all(re.fullmatch(tag_re, t) for t in tags) and age(v) >= tag_age:
+                  delete[v["name"]] = (v, f"tags {', '.join(tags)} older than {tag_age}d")
+              else:
+                  roots.append(v["name"])
+
+          # Everything reachable from a kept tag is protected (index -> platform/attestation manifests).
+          protected = set()
+          def protect(digest, required=True):
+              stack = [digest]
+              while stack:
+                  d = stack.pop()
+                  if d in protected:
+                      continue
+                  protected.add(d)
+                  stack += [c["digest"] for c in manifest(d, required).get("manifests", [])]
+          for d in roots:
+              protect(d)
+
+          # Referrers (signatures/attestations) of protected images are protected too; repeat to a fixpoint.
+          untagged = [v for v in versions if not tags_of[v["name"]]]
+          changed = True
+          while changed:
+              changed = False
+              for v in ref_versions:
+                  if v["name"] in protected:
+                      continue
+                  subjects = {"sha256:" + ref_tag.match(t).group(1) for t in tags_of[v["name"]]}
+                  if subjects & protected:
+                      protect(v["name"], required=False); changed = True
+              for v in untagged:
+                  if v["name"] in protected:
+                      continue
+                  subj = manifest(v["name"], False).get("subject", {}).get("digest")
+                  if subj and subj in protected:
+                      protect(v["name"], required=False); changed = True
+
+          # Anything a kept image still references wins over the tag regex.
+          delete = {d: x for d, x in delete.items() if d not in protected}
+          for v in ref_versions + untagged:
+              if v["name"] not in protected and v["name"] not in delete:
+                  limit = min_age
+                  if age(v) >= limit:
+                      kind = "orphaned signature/attestation" if tags_of[v["name"]] else "untagged, unreferenced"
+                      delete[v["name"]] = (v, f"{kind}, {age(v)}d old")
+
+          # Untagged versions whose manifest could not be read may be referrers of kept images: keep them.
+          skipped = [d for d in delete if d in unreadable and not tags_of[d]]
+          for d in skipped:
+              del delete[d]
+          if skipped:
+              print(f"::warning::{len(skipped)} untagged versions kept because their manifest could not be read.")
+          print(f"{len(versions)} versions, {len(protected)} protected, {len(delete)} to delete")
+          summary.write(f"### GHCR clean-up of `{image}` ({'dry run' if dry_run else 'live'})\n\n")
+          summary.write(f"{len(versions)} versions, {len(protected)} protected, **{len(delete)} to delete**\n\n")
+          for d, (v, why) in sorted(delete.items(), key=lambda x: x[1][0]["created_at"]):
+              summary.write(f"- `{d}` (id {v['id']}): {why}\n")
+
+          if len(delete) > max_del:
+              sys.exit(f"::error::{len(delete)} deletions exceed max-deletions={max_del}; raise the limit after reviewing the summary.")
+          if dry_run:
+              print("Dry run: nothing deleted.")
+              sys.exit(0)
+          for d, (v, why) in delete.items():
+              gh("-X", "DELETE", f"{base}/{v['id']}")
+              print(f"deleted {d} ({why})")

@@ -1,0 +1,159 @@
+# Reusable workflow: publish an npm package.
+#
+# Two modes:
+#   1. Tag-driven (default): call from `release: types: [published]`. The
+#      package.json version must equal the release tag (v-prefix optional);
+#      pre-releases are published under the `next` dist-tag.
+#   2. Tool-driven: set `release-command` (e.g. `npm run release` for
+#      semantic-release / multi-semantic-release, as yivi-frontend-packages
+#      does) and call from `push` on your release branches.
+#
+# Authentication uses npm Trusted Publishing (OIDC), so no NPM_TOKEN is
+# needed. IMPORTANT: on npmjs.com configure the *caller* workflow file name
+# (e.g. release.yml in your repo), not this reusable workflow.
+# An NPM_TOKEN secret can still be passed as a fallback.
+#
+# Required caller permissions (the job always requests all of them):
+#   contents: write, issues: write, pull-requests: write (semantic-release
+#   comments/tags in tool-driven mode), id-token: write
+
+name: npm publish
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        type: string
+        default: "."
+      node-version:
+        type: string
+        default: "24" # ships npm 11, required for Trusted Publishing
+      build-script:
+        description: package.json script run before publishing (skipped if missing).
+        type: string
+        default: build
+      test-script:
+        description: package.json script run before publishing (skipped if missing).
+        type: string
+        default: test
+      access:
+        description: public or restricted.
+        type: string
+        default: public
+      check-version:
+        description: Fail when package.json version differs from the release tag (tag-driven mode).
+        type: boolean
+        default: true
+      release-command:
+        description: If set, run this instead of `npm publish` (tool-driven mode).
+        type: string
+        default: ""
+      dry-run:
+        type: boolean
+        default: false
+      require-release-on-default-branch:
+        description: Refuse to publish a release whose commit is not on the default branch (tag-driven mode).
+        type: boolean
+        default: true
+      timeout-minutes:
+        type: number
+        default: 30
+    secrets:
+      NPM_TOKEN:
+        description: Optional fallback token when Trusted Publishing is not configured.
+        required: false
+
+permissions: {}
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+      id-token: write
+    concurrency:
+      group: npm-publish-${{ github.repository }}-${{ inputs.working-directory }}
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: ${{ inputs.release-command == '' && 1 || 0 }}
+          # semantic-release needs to push tags; tag-driven mode does not.
+          persist-credentials: ${{ inputs.release-command != '' }}
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: ${{ inputs.node-version }}
+          registry-url: https://registry.npmjs.org
+          cache: npm
+          cache-dependency-path: ${{ inputs.working-directory }}/package-lock.json
+
+      - name: Check release commit is on the default branch
+        if: inputs.release-command == '' && inputs.require-release-on-default-branch && github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          SHA: ${{ github.sha }}
+        run: |
+          status="$(gh api "repos/${REPO}/compare/${DEFAULT_BRANCH}...${SHA}" --jq .status)"
+          case "$status" in
+            behind|identical) ;;
+            *) echo "::error::Release commit ${SHA} is not on ${DEFAULT_BRANCH} (compare status: ${status})."; exit 1 ;;
+          esac
+
+      - run: npm ci
+
+      - name: Build and test
+        env:
+          SCRIPTS: ${{ inputs.build-script }} ${{ inputs.test-script }}
+        run: |
+          for s in $SCRIPTS; do
+            if node -e 'process.exit(require("./package.json").scripts?.[process.argv[1]] ? 0 : 1)' "$s"; then
+              npm run "$s"
+            fi
+          done
+
+      - name: Check version matches release tag
+        if: inputs.release-command == '' && inputs.check-version && github.event_name == 'release'
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          pkg="$(node -p 'require("./package.json").version')"
+          if [ "$pkg" != "${TAG#v}" ]; then
+            echo "::error::package.json version ($pkg) does not match release tag ($TAG)"; exit 1
+          fi
+
+      - name: Publish
+        if: inputs.release-command == ''
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          ACCESS: ${{ inputs.access }}
+          PRERELEASE: ${{ github.event.release.prerelease }}
+          DRY_RUN: ${{ inputs.dry-run }}
+          PRIVATE_REPO: ${{ github.event.repository.private }}
+        run: |
+          set -euo pipefail
+          args=(--access "$ACCESS")
+          [ "$PRERELEASE" = "true" ] && args+=(--tag next)
+          # Provenance requires a public source repository.
+          [ "$PRIVATE_REPO" != "true" ] && args+=(--provenance)
+          [ "$DRY_RUN" = "true" ] && args+=(--dry-run)
+          npm publish "${args[@]}"
+
+      - name: Release (tool-driven)
+        if: inputs.release-command != ''
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          RELEASE_COMMAND: ${{ inputs.release-command }}
+          DRY_RUN: ${{ inputs.dry-run }}
+        run: |
+          if [ "$DRY_RUN" = "true" ]; then RELEASE_COMMAND="$RELEASE_COMMAND --dry-run"; fi
+          bash -euo pipefail -c "$RELEASE_COMMAND"

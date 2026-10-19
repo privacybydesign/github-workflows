@@ -1,0 +1,135 @@
+# Reusable workflow: re-scan PUBLISHED images for new vulnerabilities.
+#
+# The weekly scan in v1.0 rebuilt the image from the default branch, i.e. it
+# tested the *next* image, not what is deployed. This workflow pulls the
+# published tags straight from GHCR and scans every platform of each tag
+# (amd64, arm64, ...), uploading one SARIF category per tag/platform.
+#
+# Special tag values:
+#   latest-release  resolves to the image tag of the latest GitHub release
+#                   (v1.2.3 -> 1.2.3)
+#
+# Required caller permissions: contents: read, packages: read, security-events: write
+
+name: Image rescan
+
+on:
+  workflow_call:
+    inputs:
+      image-name:
+        description: Image without tag. Defaults to ghcr.io/<owner>/<repo> (lowercased).
+        type: string
+        default: ""
+      tags:
+        description: Space-separated tags to scan.
+        type: string
+        default: edge latest-release
+      severity-cutoff:
+        type: string
+        default: high
+      fail-build:
+        type: boolean
+        default: true
+      timeout-minutes:
+        type: number
+        default: 30
+
+permissions: {}
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      matrix: ${{ steps.resolve.outputs.matrix }}
+      empty: ${{ steps.resolve.outputs.empty }}
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Install skopeo
+        run: command -v skopeo >/dev/null || { sudo apt-get update && sudo apt-get install -y --no-install-recommends skopeo; }
+
+      - name: Resolve tags to per-platform digests
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_IMAGE: ${{ inputs.image-name }}
+          TAGS: ${{ inputs.tags }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          image="$(echo "${INPUT_IMAGE:-ghcr.io/${REPO}}" | tr '[:upper:]' '[:lower:]')"
+          entries='[]'
+          for tag in $TAGS; do
+            if [ "$tag" = latest-release ]; then
+              t="$(gh release view --repo "$REPO" --json tagName --jq .tagName 2>/dev/null || true)"
+              [ -z "$t" ] && { echo "::notice::No GitHub release yet; skipping latest-release."; continue; }
+              tag="${t#v}"
+            fi
+            if ! raw="$(skopeo inspect --raw "docker://${image}:${tag}" 2>/dev/null)"; then
+              echo "::warning::${image}:${tag} does not exist; skipping."; continue
+            fi
+            entries="$(jq -c --arg img "$image" --arg tag "$tag" --argjson raw "$raw" '
+              . + (if ($raw.manifests // null) != null then
+                     [ $raw.manifests[]
+                       | select((.platform.os // "unknown") != "unknown")
+                       | { tag: $tag,
+                           platform: ([.platform.os, .platform.architecture, .platform.variant] | map(select(. != null)) | join("/")),
+                           ref: ($img + "@" + .digest) } ]
+                   else
+                     [ { tag: $tag, platform: "single", ref: ($img + ":" + $tag) } ]
+                   end)' <<< "$entries")"
+          done
+          # The same digest under several tags (e.g. latest-release and edge) is scanned once.
+          entries="$(jq -c 'group_by(.ref) | map(.[0])' <<< "$entries")"
+          echo "matrix=$(jq -c '{include: .}' <<< "$entries")" >> "$GITHUB_OUTPUT"
+          echo "empty=$(jq 'length == 0' <<< "$entries")" >> "$GITHUB_OUTPUT"
+          jq -r '.[] | "- \(.tag) \(.platform): \(.ref)"' <<< "$entries" >> "$GITHUB_STEP_SUMMARY"
+
+  scan:
+    needs: resolve
+    if: needs.resolve.outputs.empty != 'true'
+    name: scan (${{ matrix.tag }}, ${{ matrix.platform }})
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    permissions:
+      contents: read
+      packages: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.resolve.outputs.matrix) }}
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Scan
+        id: scan
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
+        with:
+          # registry: pulls straight from GHCR (no Docker daemon), per-platform digest.
+          image: registry:${{ matrix.ref }}
+          only-fixed: true
+          fail-build: ${{ inputs.fail-build }}
+          severity-cutoff: ${{ inputs.severity-cutoff }}
+          output-format: sarif
+
+      - name: Upload scan results to code scanning
+        if: ${{ !cancelled() && steps.scan.outputs.sarif != '' }}
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+        with:
+          sarif_file: ${{ steps.scan.outputs.sarif }}
+          category: rescan-${{ matrix.tag }}-${{ matrix.platform }}

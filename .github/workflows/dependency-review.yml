@@ -1,0 +1,63 @@
+# Reusable workflow: block PRs that add dependencies with known
+# vulnerabilities or disallowed licences (Go, npm, Actions, Docker, ...).
+#
+# Free for public repositories; private repositories need GitHub Code
+# Security (dependency graph). Runs only on pull_request events; on other
+# events it succeeds without doing anything, so it can sit in an
+# "all checks passed" gate.
+#
+# Required caller permissions: contents: read, pull-requests: write (summary comment)
+
+name: Dependency review
+
+on:
+  workflow_call:
+    inputs:
+      fail-on-severity:
+        description: low, moderate, high or critical.
+        type: string
+        default: high
+      fail-on-scopes:
+        description: Comma-separated scopes (runtime, development, unknown).
+        type: string
+        default: runtime
+      deny-licenses:
+        description: Comma-separated SPDX licence identifiers to block. Mutually exclusive with allow-licenses.
+        type: string
+        default: ""
+      allow-licenses:
+        description: Comma-separated SPDX licence identifiers that are allowed.
+        type: string
+        default: ""
+      comment-summary-in-pr:
+        description: always, on-failure or never.
+        type: string
+        default: on-failure
+      warn-only:
+        type: boolean
+        default: false
+
+permissions: {}
+
+jobs:
+  dependency-review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Skip outside pull requests
+        if: github.event_name != 'pull_request'
+        run: echo "Dependency review only runs on pull_request events."
+
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        if: github.event_name == 'pull_request'
+        with:
+          fail-on-severity: ${{ inputs.fail-on-severity }}
+          fail-on-scopes: ${{ inputs.fail-on-scopes }}
+          deny-licenses: ${{ inputs.deny-licenses }}
+          allow-licenses: ${{ inputs.allow-licenses }}
+          comment-summary-in-pr: ${{ github.event.pull_request.head.repo.full_name == github.repository && inputs.comment-summary-in-pr || 'never' }}
+          warn-only: ${{ inputs.warn-only }}
+          show-openssf-scorecard: true

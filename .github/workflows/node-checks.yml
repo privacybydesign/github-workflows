@@ -1,0 +1,140 @@
+# Reusable workflow: Node.js status checks (npm, Yarn or pnpm).
+#
+# Installs with the lockfile that is present and runs the package.json
+# scripts listed in `scripts` (skipping the ones that don't exist), which
+# covers the lint/test/build jobs in irma_keyshare_webclient,
+# yivi-frontend-packages, the issuers' frontend/ folders, etc.
+#
+# v1.1: optional `ignore-scripts` (blocks dependency install scripts, the
+# vector of the 2025 npm worms) with an allowlist, timeouts, cancellation of
+# superseded PR runs.
+
+name: Node checks
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: Directory that contains package.json.
+        type: string
+        default: "."
+      node-version:
+        description: Node.js version. Ignored when a .nvmrc / .node-version file exists in working-directory.
+        type: string
+        default: "24"
+      scripts:
+        description: Space-separated package.json scripts to run, in order. Missing scripts are skipped.
+        type: string
+        default: lint test build
+      ignore-scripts:
+        description: >-
+          Install without running dependency lifecycle scripts (npm/yarn/pnpm).
+          Default false in v1.x for compatibility; recommended true (the templates set it).
+        type: boolean
+        default: false
+      allowed-scripts:
+        description: Space-separated packages whose install scripts may still run (`npm rebuild <pkg>`), e.g. "esbuild sharp".
+        type: string
+        default: ""
+      timeout-minutes:
+        type: number
+        default: 30
+      audit:
+        description: Run a dependency audit (high and above fails).
+        type: boolean
+        default: false
+      runs-on:
+        type: string
+        default: ubuntu-latest
+
+permissions: {}
+
+jobs:
+  checks:
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    concurrency:
+      group: node-${{ github.workflow }}-${{ inputs.working-directory }}-${{ github.ref }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Detect package manager
+        id: pm
+        run: |
+          if   [ -f pnpm-lock.yaml ]; then pm=pnpm
+          elif [ -f yarn.lock ];      then pm=yarn
+          elif [ -f package-lock.json ]; then pm=npm
+          else echo "::error::No lockfile found in $(pwd)"; exit 1; fi
+          vf=""
+          for f in .nvmrc .node-version; do [ -f "$f" ] && vf="$f" && break; done
+          { echo "pm=$pm"; echo "version-file=$vf"; } >> "$GITHUB_OUTPUT"
+
+      - name: Enable Corepack (Yarn berry / pnpm)
+        if: steps.pm.outputs.pm != 'npm'
+        run: corepack enable
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: ${{ steps.pm.outputs.version-file == '' && inputs.node-version || '' }}
+          node-version-file: ${{ steps.pm.outputs.version-file != '' && format('{0}/{1}', inputs.working-directory, steps.pm.outputs.version-file) || '' }}
+          cache: ${{ steps.pm.outputs.pm }}
+          cache-dependency-path: ${{ inputs.working-directory }}/${{ steps.pm.outputs.pm == 'pnpm' && 'pnpm-lock.yaml' || steps.pm.outputs.pm == 'yarn' && 'yarn.lock' || 'package-lock.json' }}
+
+      - name: Install dependencies
+        env:
+          PM: ${{ steps.pm.outputs.pm }}
+          IGNORE_SCRIPTS: ${{ inputs.ignore-scripts }}
+          ALLOWED: ${{ inputs.allowed-scripts }}
+        run: |
+          set -euo pipefail
+          flag=()
+          if [ "$IGNORE_SCRIPTS" = true ]; then
+            flag=(--ignore-scripts)
+            export YARN_ENABLE_SCRIPTS=false   # Yarn berry
+          fi
+          case "$PM" in
+            npm)  npm ci "${flag[@]}" ;;
+            yarn) if [ -f .yarnrc.yml ]; then yarn install --immutable; else yarn install --frozen-lockfile "${flag[@]}"; fi ;;
+            pnpm) pnpm install --frozen-lockfile "${flag[@]}" ;;
+          esac
+          if [ "$IGNORE_SCRIPTS" = true ] && [ -n "$ALLOWED" ]; then
+            read -ra pkgs <<< "$ALLOWED"
+            case "$PM" in
+              npm)  npm rebuild "${pkgs[@]}" ;;
+              yarn) if [ -f .yarnrc.yml ]; then YARN_ENABLE_SCRIPTS=true yarn rebuild "${pkgs[@]}"; else npm rebuild "${pkgs[@]}"; fi ;;
+              pnpm) pnpm rebuild "${pkgs[@]}" ;;
+            esac
+          fi
+
+      - name: Audit dependencies
+        if: inputs.audit
+        env:
+          PM: ${{ steps.pm.outputs.pm }}
+        run: |
+          case "$PM" in
+            npm)  npm audit --audit-level=high --omit=dev ;;
+            yarn) if [ -f .yarnrc.yml ]; then yarn npm audit --severity high --environment production; else yarn audit --level high --groups dependencies; fi ;;
+            pnpm) pnpm audit --audit-level high --prod ;;
+          esac
+
+      - name: Run scripts
+        env:
+          PM: ${{ steps.pm.outputs.pm }}
+          SCRIPTS: ${{ inputs.scripts }}
+        run: |
+          set -euo pipefail
+          for s in $SCRIPTS; do
+            if node -e 'process.exit(require("./package.json").scripts?.[process.argv[1]] ? 0 : 1)' "$s"; then
+              echo "::group::$PM run $s"; "$PM" run "$s"; echo "::endgroup::"
+            else
+              echo "::notice::Script '$s' not defined in $(pwd)/package.json, skipping."
+            fi
+          done

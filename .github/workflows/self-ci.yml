@@ -1,0 +1,48 @@
+# CI for this repository: lint every workflow and template with actionlint
+# and zizmor (using the shared workflow-lint.yml from this same commit),
+# and shellcheck the org settings script.
+name: Self CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  merge_group:
+
+permissions: {}
+
+jobs:
+  workflow-lint:
+    uses: ./.github/workflows/workflow-lint.yml
+    permissions:
+      contents: read
+    with:
+      zizmor-config: zizmor.yml
+      paths: .github org-dot-github/workflow-templates examples
+      actionlint-paths: .github/workflows org-dot-github/workflow-templates examples
+
+  shellcheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - run: shellcheck org-settings/*.sh
+
+  passed:
+    name: Status checks passed
+    if: always()
+    needs: [workflow-lint, shellcheck]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: All required jobs succeeded
+        env:
+          RESULTS: ${{ toJSON(needs.*.result) }}
+        run: |
+          echo "$RESULTS"
+          if grep -qE '"(failure|cancelled)"' <<< "$RESULTS"; then exit 1; fi

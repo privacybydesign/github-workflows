@@ -1,0 +1,91 @@
+# Reusable workflow: lint GitHub Actions workflows with actionlint (+shellcheck)
+# and audit them with zizmor (template injection, excessive permissions,
+# unpinned actions, dangerous triggers, credential persistence, ...).
+#
+# Required caller permissions: contents: read
+
+name: Workflow lint
+
+on:
+  workflow_call:
+    inputs:
+      actionlint-version:
+        type: string
+        default: v1.7.12
+      zizmor-version:
+        type: string
+        default: 1.30.1
+      zizmor-config:
+        description: zizmor config file. Defaults to .github/zizmor.yml when it exists.
+        type: string
+        default: ""
+      zizmor-min-severity:
+        type: string
+        default: medium
+      actionlint-paths:
+        description: >-
+          Space-separated directories whose *.yml/*.yaml workflow files actionlint checks
+          (dependabot.yml is skipped). Empty = actionlint's default (.github/workflows).
+        type: string
+        default: ""
+      paths:
+        description: Space-separated paths for zizmor.
+        type: string
+        default: .github
+      timeout-minutes:
+        type: number
+        default: 10
+
+permissions: {}
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    concurrency:
+      group: workflow-lint-${{ github.workflow }}-${{ github.ref }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+          cache: false
+
+      - name: actionlint
+        env:
+          VERSION: ${{ inputs.actionlint-version }}
+          PATHS: ${{ inputs.actionlint-paths }}
+        # `go run pkg@version` is verified against the Go checksum database.
+        run: |
+          set -euo pipefail
+          files=()
+          if [ -n "$PATHS" ]; then
+            read -ra dirs <<< "$PATHS"
+            mapfile -t files < <(find "${dirs[@]}" -type f \( -name '*.yml' -o -name '*.yaml' \) ! -name 'dependabot.y*ml' | sort)
+          fi
+          go run "github.com/rhysd/actionlint/cmd/actionlint@${VERSION}" -color "${files[@]}"
+
+      - name: Resolve zizmor config
+        id: cfg
+        env:
+          CONFIG: ${{ inputs.zizmor-config }}
+        run: |
+          cfg="$CONFIG"
+          [ -z "$cfg" ] && [ -f .github/zizmor.yml ] && cfg=.github/zizmor.yml
+          echo "config=$cfg" >> "$GITHUB_OUTPUT"
+
+      - name: zizmor
+        uses: zizmorcore/zizmor-action@f9597c869b2e67095f9b527070297a13a6efe928 # v0.7.0
+        with:
+          version: ${{ inputs.zizmor-version }}
+          inputs: ${{ inputs.paths }}
+          config: ${{ steps.cfg.outputs.config }}
+          min-severity: ${{ inputs.zizmor-min-severity }}
+          advanced-security: false
+          annotations: true

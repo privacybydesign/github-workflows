@@ -1,0 +1,23 @@
+{
+  "github_owned_allowed": true,
+  "verified_allowed": true,
+  "patterns_allowed": [
+    "privacybydesign/*",
+    "anchore/scan-action@*",
+    "anchore/sbom-action@*",
+    "golangci/golangci-lint-action@*",
+    "googleapis/release-please-action@*",
+    "amannn/action-semantic-pull-request@*",
+    "terraform-linters/setup-tflint@*",
+    "sigstore/cosign-installer@*",
+    "zizmorcore/zizmor-action@*",
+    "ossf/scorecard-action@*",
+    "codecov/codecov-action@*",
+    "subosito/flutter-action@*",
+    "dart-lang/setup-dart@*",
+    "flutter-actions/setup-flutter@*",
+    "sonarsource/sonarqube-scan-action@*",
+    "webiny/action-conventional-commits@*",
+    "coverallsapp/github-action@*"
+  ]
+}

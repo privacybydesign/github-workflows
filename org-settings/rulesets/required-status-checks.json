@@ -1,0 +1,23 @@
+{
+  "name": "required-status-checks",
+  "target": "branch",
+  "enforcement": "active",
+  "conditions": {
+    "ref_name": { "include": ["~DEFAULT_BRANCH"], "exclude": [] },
+    "repository_property": {
+      "include": [{ "name": "shared-ci", "property_values": ["v1"], "source": "custom" }],
+      "exclude": []
+    }
+  },
+  "bypass_actors": [],
+  "rules": [
+    {
+      "type": "required_status_checks",
+      "parameters": {
+        "strict_required_status_checks_policy": false,
+        "do_not_enforce_on_create": true,
+        "required_status_checks": [{ "context": "Status checks passed" }]
+      }
+    }
+  ]
+}

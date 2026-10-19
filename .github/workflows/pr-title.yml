@@ -1,0 +1,34 @@
+# Reusable workflow: enforce Conventional Commit PR titles.
+# Needed by release-please / semantic-release (squash-merge uses the PR title).
+#
+# Caller trigger: pull_request: types: [opened, edited, synchronize, reopened]
+# Required caller permissions: pull-requests: read
+
+name: PR title
+
+on:
+  workflow_call:
+    inputs:
+      types:
+        description: Allowed types, newline-separated. Empty = the conventional-commit defaults.
+        type: string
+        default: ""
+      require-scope:
+        type: boolean
+        default: false
+
+permissions: {}
+
+jobs:
+  pr-title:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: read
+    steps:
+      - uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50 # v6.1.1
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          types: ${{ inputs.types }}
+          requireScope: ${{ inputs.require-scope }}

@@ -1,0 +1,11 @@
+{
+  "name": "Yivi: Image rescan",
+  "description": "Weekly scan of the published GHCR images, all platforms.",
+  "iconName": "octicon shield-check",
+  "categories": [
+    "Docker"
+  ],
+  "filePatterns": [
+    "Dockerfile"
+  ]
+}

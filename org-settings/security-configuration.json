@@ -1,0 +1,13 @@
+{
+  "name": "yivi-baseline",
+  "description": "Dependency graph, Dependabot alerts + security updates, secret scanning with push protection, private vulnerability reporting. Code scanning runs via the shared codeql.yml workflow.",
+  "dependency_graph": "enabled",
+  "dependabot_alerts": "enabled",
+  "dependabot_security_updates": "enabled",
+  "secret_scanning": "enabled",
+  "secret_scanning_push_protection": "enabled",
+  "secret_scanning_validity_checks": "enabled",
+  "private_vulnerability_reporting": "enabled",
+  "code_scanning_default_setup": "disabled",
+  "enforcement": "enforced"
+}

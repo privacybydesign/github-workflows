@@ -1,0 +1,29 @@
+# Build, scan (Anchore) and publish the container image to ghcr.io/${{ github.repository }}.
+#   push to $default-branch -> :edge    release published / v* tag -> :<version>    manual run -> :<branch>
+# PR builds are scanned in "Status checks" (push-image: false); published
+# images are re-scanned weekly by "Image rescan".
+name: Delivery
+
+on:
+  push:
+    branches: [$default-branch]
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  docker:
+    uses: privacybydesign/github-workflows/.github/workflows/docker-publish.yml@v1
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+      id-token: write
+      attestations: write
+    with:
+      platforms: linux/amd64,linux/arm64
+      # tag-latest: true
+      # tag-semver-rollups: true
+      # cosign: true   # keyless signature; recorded in the public Rekor log

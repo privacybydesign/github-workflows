@@ -1,0 +1,95 @@
+# Reusable workflow: CodeQL static analysis.
+#
+# Languages (JSON list): go, javascript-typescript, actions, python, java-kotlin, ...
+# `actions` analyses the workflow files themselves (injection, untrusted checkout).
+# Go is built with autobuild unless `go-build-command` is given.
+#
+# Free for public repositories; private repositories need GitHub Code Security.
+# Required caller permissions: contents: read, security-events: write, actions: read
+
+name: CodeQL
+
+on:
+  workflow_call:
+    inputs:
+      languages:
+        type: string
+        default: '["actions"]'
+      queries:
+        description: Query suite (security-extended, security-and-quality, or empty for default).
+        type: string
+        default: security-extended
+      go-version-file:
+        description: go.mod used to set up Go (for the go language).
+        type: string
+        default: go.mod
+      go-build-command:
+        description: Manual build command for Go (e.g. "cd backend && go build ./..."). Empty = autobuild.
+        type: string
+        default: ""
+      config-file:
+        description: Optional CodeQL config file (paths-ignore, etc.).
+        type: string
+        default: ""
+      timeout-minutes:
+        type: number
+        default: 60
+
+permissions: {}
+
+jobs:
+  analyze:
+    name: analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    concurrency:
+      group: codeql-${{ github.workflow }}-${{ matrix.language }}-${{ github.ref }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ${{ fromJSON(inputs.languages) }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        if: matrix.language == 'go'
+        with:
+          go-version-file: ${{ inputs.go-version-file }}
+          cache: false
+
+      - name: Build mode
+        id: mode
+        env:
+          LANGUAGE: ${{ matrix.language }}
+          GO_BUILD: ${{ inputs.go-build-command }}
+        run: |
+          case "$LANGUAGE" in
+            go) if [ -n "$GO_BUILD" ]; then m=manual; else m=autobuild; fi ;;
+            c-cpp|swift) m=autobuild ;;
+            *) m=none ;;
+          esac
+          echo "mode=$m" >> "$GITHUB_OUTPUT"
+
+      - uses: github/codeql-action/init@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ steps.mode.outputs.mode }}
+          queries: ${{ inputs.queries }}
+          config-file: ${{ inputs.config-file }}
+
+      - name: Build (manual)
+        if: steps.mode.outputs.mode == 'manual'
+        env:
+          GO_BUILD: ${{ inputs.go-build-command }}
+        run: bash -euo pipefail -c "$GO_BUILD"
+
+      - uses: github/codeql-action/analyze@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+        with:
+          category: /language:${{ matrix.language }}

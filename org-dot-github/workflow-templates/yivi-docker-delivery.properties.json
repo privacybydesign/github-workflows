@@ -1,0 +1,11 @@
+{
+  "name": "Yivi: Docker delivery",
+  "description": "Build, scan and publish a container image to GHCR (edge / version / branch tags).",
+  "iconName": "octicon container",
+  "categories": [
+    "Docker"
+  ],
+  "filePatterns": [
+    "Dockerfile"
+  ]
+}

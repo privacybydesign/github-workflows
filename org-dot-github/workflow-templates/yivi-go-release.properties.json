@@ -1,0 +1,11 @@
+{
+  "name": "Yivi: Go release binaries",
+  "description": "Cross-compile a Go binary and attach it with checksums to a GitHub release.",
+  "iconName": "octicon rocket",
+  "categories": [
+    "Go"
+  ],
+  "filePatterns": [
+    "go.mod"
+  ]
+}

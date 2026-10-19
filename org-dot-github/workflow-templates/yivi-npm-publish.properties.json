@@ -1,0 +1,12 @@
+{
+  "name": "Yivi: npm publish",
+  "description": "Publish to npm with Trusted Publishing on GitHub release.",
+  "iconName": "octicon rocket",
+  "categories": [
+    "JavaScript",
+    "TypeScript"
+  ],
+  "filePatterns": [
+    "package.json"
+  ]
+}
