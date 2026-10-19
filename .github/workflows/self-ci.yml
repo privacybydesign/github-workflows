@@ -1,6 +1,5 @@
-# CI for this repository: lint every workflow and template with actionlint
-# and zizmor (using the shared workflow-lint.yml from this same commit),
-# and shellcheck the org settings script.
+# CI for this repository: lint every workflow with actionlint and zizmor
+# (using the shared workflow-lint.yml from this same commit).
 name: Self CI
 
 on:
@@ -18,24 +17,13 @@ jobs:
       contents: read
     with:
       zizmor-config: zizmor.yml
-      paths: .github org-dot-github/workflow-templates examples
-      actionlint-paths: .github/workflows org-dot-github/workflow-templates examples
-
-  shellcheck:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-      - run: shellcheck org-settings/*.sh
+      paths: .github
+      actionlint-paths: .github/workflows
 
   passed:
     name: Status checks passed
     if: always()
-    needs: [workflow-lint, shellcheck]
+    needs: [workflow-lint]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions: {}

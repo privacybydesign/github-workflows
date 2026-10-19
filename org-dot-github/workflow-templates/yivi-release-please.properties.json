@@ -1,8 +1,0 @@
-{
-  "name": "Yivi: release-please",
-  "description": "Automated changelog, version bump PRs and GitHub releases.",
-  "iconName": "octicon rocket",
-  "categories": [
-    "Automation"
-  ]
-}

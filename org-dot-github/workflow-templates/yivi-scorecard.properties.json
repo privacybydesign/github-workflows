@@ -1,8 +1,0 @@
-{
-  "name": "Yivi: OpenSSF Scorecard",
-  "description": "Supply-chain security score for public repositories.",
-  "iconName": "octicon shield-check",
-  "categories": [
-    "Automation"
-  ]
-}
