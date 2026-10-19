@@ -41,3 +41,7 @@ On private repositories, artifact attestations are skipped, and `codeql.yml` and
 ## Versioning
 
 Releases are semver tags (`v1.2.0`) with a moving major tag (`v1`); breaking changes get a new major. Third-party actions are pinned to commit SHAs and kept up to date by Dependabot. See [CHANGELOG.md](CHANGELOG.md).
+
+## License
+
+[Apache License 2.0](LICENSE).
