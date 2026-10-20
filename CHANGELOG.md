@@ -2,7 +2,7 @@
 
 ## v1.1.0
 
-All changes are backwards compatible for `@v1` callers: new inputs default
+All changes are backwards compatible for v1.0 callers: new inputs default
 to the v1.0 behaviour unless noted. New checks that can fail a build are
 marked ⚠.
 
@@ -57,6 +57,7 @@ marked ⚠.
 - Delivery template: PR scanning moved to Status checks, the weekly schedule moved to Image rescan.
 - New templates: image rescan, GHCR clean-up, OpenSSF Scorecard; Go release template uses tag push.
 - `templates/dependabot.yml` (actions, Docker digests, Go, npm, Terraform; grouped; 7-day cooldown).
+- Callers pin the shared workflows to a commit SHA with a `# vX.Y.Z` comment instead of `@v1`; `templates/zizmor.yml` requires a SHA for every `uses:`. There is no moving `v1` tag.
 - `org-settings/`: allowed actions, rulesets, security configuration, apply script with `baseline`, `opt-in` and `strict` phases.
 
 ## v1.0.0
