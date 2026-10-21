@@ -77,12 +77,35 @@ jobs:
           esac
           echo "mode=$m" >> "$GITHUB_OUTPUT"
 
+      # Callers reference these workflows by the moving v1 tag on purpose, so
+      # actions/unpinned-tag would flag every caller. zizmor requires a SHA for
+      # every other action. `config` takes precedence over `config-file`, so the
+      # caller's file is merged in here.
+      - name: Config
+        id: config
+        env:
+          CONFIG_FILE: ${{ inputs.config-file }}
+        run: |
+          set -euo pipefail
+          filter='{"exclude": {"id": "actions/unpinned-tag"}}'
+          if [ -n "$CONFIG_FILE" ]; then
+            config="$(yq -o yaml ".\"query-filters\" += [$filter]" "$CONFIG_FILE")"
+          else
+            config="$(yq -n -o yaml ".\"query-filters\" = [$filter]")"
+          fi
+          echo "$config"
+          {
+            echo "config<<EOF_CODEQL_CONFIG"
+            echo "$config"
+            echo "EOF_CODEQL_CONFIG"
+          } >> "$GITHUB_OUTPUT"
+
       - uses: github/codeql-action/init@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ steps.mode.outputs.mode }}
           queries: ${{ inputs.queries }}
-          config-file: ${{ inputs.config-file }}
+          config: ${{ steps.config.outputs.config }}
 
       - name: Build (manual)
         if: steps.mode.outputs.mode == 'manual'
