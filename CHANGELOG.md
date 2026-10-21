@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.1.1
+
+- Callers use the moving `@v1` tag again, as in v1.0. v1.1.0 asked for a commit SHA per caller, which meant a pull request in every repository for each release. `templates/zizmor.yml` allows a tag for `privacybydesign/*` again and still requires a SHA for every other action.
+- `codeql.yml` no longer runs `actions/unpinned-tag`, which would flag every `@v1` reference. zizmor covers third-party actions. A caller's `config-file` is merged with this filter.
+
 ## v1.1.0
 
 All changes are backwards compatible for v1.0 callers: new inputs default
@@ -56,9 +61,7 @@ marked ⚠.
 - Status checks templates for Go and Node with one required gate job, **`Status checks passed`**, and `merge_group` triggers.
 - Delivery template: PR scanning moved to Status checks, the weekly schedule moved to Image rescan.
 - New templates: image rescan, GHCR clean-up, OpenSSF Scorecard; Go release template uses tag push.
-- `templates/dependabot.yml` (actions, Docker digests, Go, npm, Terraform; grouped; 7-day cooldown).
-- Callers pin the shared workflows to a commit SHA with a `# vX.Y.Z` comment instead of `@v1`; `templates/zizmor.yml` requires a SHA for every `uses:`. There is no moving `v1` tag.
-- `org-settings/`: allowed actions, rulesets, security configuration, apply script with `baseline`, `opt-in` and `strict` phases.
+- `templates/dependabot.yml` (actions, Docker digests, Go, npm, Terraform; grouped; 7-day cooldown).- `org-settings/`: allowed actions, rulesets, security configuration, apply script with `baseline`, `opt-in` and `strict` phases.
 
 ## v1.0.0
 - Initial release: docker-publish, go-checks, go-release, node-checks, npm-publish, terraform, pr-title, release-please.
