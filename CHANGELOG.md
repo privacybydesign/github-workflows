@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.1.3
+
+- `workflow-lint.yml`: a repository without its own `.github/zizmor.yml` now gets the shared policy (`privacybydesign/*` by tag, everything else by SHA) instead of zizmor's defaults, which reject `@v1`. Repositories set up from the workflow templates pass without copying `zizmor.yml`.
+
 ## v1.1.2
 
 - `docker-publish.yml`: the provenance attestation no longer tries to create an artifact storage record. That needed `artifact-metadata: write` from every caller and only produced a warning; the attestation itself is unchanged.

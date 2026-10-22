@@ -16,7 +16,7 @@ on:
         type: string
         default: 1.30.1
       zizmor-config:
-        description: zizmor config file. Defaults to .github/zizmor.yml when it exists.
+        description: zizmor config file. Defaults to .github/zizmor.yml when it exists, else the shared policy (templates/zizmor.yml).
         type: string
         default: ""
       zizmor-min-severity:
@@ -75,9 +75,22 @@ jobs:
         id: cfg
         env:
           CONFIG: ${{ inputs.zizmor-config }}
+        # Without a config of its own, a repository gets the shared policy, so
+        # the @v1 references from the workflow templates pass out of the box.
         run: |
           cfg="$CONFIG"
           [ -z "$cfg" ] && [ -f .github/zizmor.yml ] && cfg=.github/zizmor.yml
+          if [ -z "$cfg" ]; then
+            cfg="$RUNNER_TEMP/zizmor.yml"
+            cat > "$cfg" <<'EOF'
+          rules:
+            unpinned-uses:
+              config:
+                policies:
+                  privacybydesign/*: ref-pin
+                  "*": hash-pin
+          EOF
+          fi
           echo "config=$cfg" >> "$GITHUB_OUTPUT"
 
       - name: zizmor
