@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.1.2
+
+- `docker-publish.yml`: the provenance attestation no longer tries to create an artifact storage record. That needed `artifact-metadata: write` from every caller and only produced a warning; the attestation itself is unchanged.
+
 ## v1.1.1
 
 - Callers use the moving `@v1` tag again, as in v1.0. v1.1.0 asked for a commit SHA per caller, which meant a pull request in every repository for each release. `templates/zizmor.yml` allows a tag for `privacybydesign/*` again and still requires a SHA for every other action.
