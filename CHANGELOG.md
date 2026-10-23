@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Templates: no `codeql` job. Public repositories in the organization get CodeQL through default setup, which rejects results from `codeql.yml`.
+
 ## v1.1.3
 
 - `templates/workflows/`: caller templates for new repositories (Status checks for Go and Node, Delivery, Image rescan, Terraform, releases and more), linted by Self CI. They replace the workflow templates for the org `.github` repository, which public repositories could not use while that repository is private.
