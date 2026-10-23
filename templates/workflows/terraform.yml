@@ -1,0 +1,68 @@
+# Terraform: checks + plan on PRs, gated apply on the default branch,
+# drift detection on the weekly schedule. Also the repo's "Status checks".
+name: Status checks
+
+on:
+  push:
+    branches: [main] # your default branch
+  pull_request:
+  merge_group:
+  schedule:
+    - cron: "17 6 * * 1" # Mondays: drift detection
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  terraform:
+    strategy:
+      fail-fast: false
+      matrix:
+        dir: [terraform] # one entry per root module
+    uses: privacybydesign/github-workflows/.github/workflows/terraform.yml@v1
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+    with:
+      working-directory: ${{ matrix.dir }}
+      apply: true
+      environment: production
+      checkov: warn
+    secrets:
+      TF_ENV: ${{ secrets.TF_ENV }}
+
+  codeql:
+    uses: privacybydesign/github-workflows/.github/workflows/codeql.yml@v1
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+
+  dependency-review:
+    uses: privacybydesign/github-workflows/.github/workflows/dependency-review.yml@v1
+    permissions:
+      contents: read
+      pull-requests: write
+
+  workflow-lint:
+    uses: privacybydesign/github-workflows/.github/workflows/workflow-lint.yml@v1
+    permissions:
+      contents: read
+
+  # Single required check for rulesets/branch protection: job names inside this
+  # workflow can change without touching the ruleset.
+  passed:
+    name: Status checks passed
+    if: always()
+    needs: [terraform, codeql, dependency-review, workflow-lint]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: All required jobs succeeded
+        env:
+          RESULTS: ${{ toJSON(needs.*.result) }}
+        run: |
+          echo "$RESULTS"
+          if grep -qE '"(failure|cancelled)"' <<< "$RESULTS"; then exit 1; fi
