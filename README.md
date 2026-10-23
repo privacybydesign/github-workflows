@@ -32,7 +32,17 @@ jobs:
       contents: read
 ```
 
-Copy [`templates/dependabot.yml`](templates/dependabot.yml) and [`templates/zizmor.yml`](templates/zizmor.yml) to your `.github/` directory: Dependabot keeps your third-party actions pinned and current, and zizmor allows `@v1` for these workflows but requires a commit SHA for every other action.
+Copy [`templates/dependabot.yml`](templates/dependabot.yml) to your `.github/` directory: Dependabot keeps your third-party actions pinned and current. workflow-lint allows `@v1` for these workflows and requires a commit SHA for every other action; add [`templates/zizmor.yml`](templates/zizmor.yml) as `.github/zizmor.yml` only if you need to change that policy.
+
+### Starting a new repository
+
+In the privacybydesign organization, a pull request can only merge once a check named `Status checks passed` succeeds. The templates in [`templates/workflows/`](templates/workflows) give you that check:
+
+1. Copy `status-checks-go.yml` or `status-checks-node.yml` to `.github/workflows/status-checks.yml` and adjust the inputs (working directory, Dockerfile, languages). It ends in the `Status checks passed` job.
+2. Copy `templates/dependabot.yml` to `.github/dependabot.yml` and remove the ecosystems you don't use.
+3. If the repository publishes a container image, also add `delivery.yml` and `image-rescan.yml`.
+
+Open a pull request with these files. It runs the new status checks itself, so it can merge once they pass. Other templates: `release-please.yml`, `go-release.yml`, `npm-publish.yml`, `pr-title.yml`, `terraform.yml`, `ghcr-cleanup.yml` and `scorecard.yml`.
 
 The inputs of each workflow are documented in its file, under `on.workflow_call.inputs`. A reusable workflow gets no more permissions than the calling job grants, so grant the ones its file lists.
 

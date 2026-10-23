@@ -17,8 +17,8 @@ jobs:
       contents: read
     with:
       zizmor-config: zizmor.yml
-      paths: .github
-      actionlint-paths: .github/workflows
+      paths: .github templates/workflows
+      actionlint-paths: .github/workflows templates/workflows
 
   passed:
     name: Status checks passed
