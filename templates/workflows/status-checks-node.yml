@@ -7,7 +7,7 @@ on:
   pull_request:
   merge_group:
   schedule:
-    - cron: "17 6 * * 1" # Mondays: CodeQL with fresh queries
+    - cron: "17 6 * * 1" # Mondays: govulncheck and image scan against fresh databases
   workflow_dispatch:
 
 permissions: {}
@@ -36,15 +36,6 @@ jobs:
     with:
       push-image: false
 
-  codeql:
-    uses: privacybydesign/github-workflows/.github/workflows/codeql.yml@v1
-    permissions:
-      contents: read
-      security-events: write
-      actions: read
-    with:
-      languages: '["javascript-typescript", "actions"]'
-
   dependency-review:
     uses: privacybydesign/github-workflows/.github/workflows/dependency-review.yml@v1
     permissions:
@@ -61,7 +52,7 @@ jobs:
   passed:
     name: Status checks passed
     if: always()
-    needs: [node, docker, codeql, dependency-review, workflow-lint]
+    needs: [node, docker, dependency-review, workflow-lint]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions: {}

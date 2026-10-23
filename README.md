@@ -14,7 +14,7 @@ Reusable GitHub Actions workflows for the [privacybydesign](https://github.com/p
 | `node-checks.yml` | npm, Yarn or pnpm install, then lint, test and build |
 | `npm-publish.yml` | Publishes to npm with Trusted Publishing |
 | `terraform.yml` | fmt, validate, tflint, Checkov, plan and apply |
-| `codeql.yml` | CodeQL for Go, JavaScript/TypeScript and workflow files |
+| `codeql.yml` | CodeQL for Go, JavaScript/TypeScript and workflow files, for repositories without CodeQL default setup |
 | `dependency-review.yml` | Blocks pull requests that add vulnerable or disallowed-licence dependencies |
 | `workflow-lint.yml` | actionlint and zizmor |
 | `pr-title.yml` | Checks that pull request titles follow Conventional Commits |
@@ -47,6 +47,8 @@ Open a pull request with these files. It runs the new status checks itself, so i
 The inputs of each workflow are documented in its file, under `on.workflow_call.inputs`. A reusable workflow gets no more permissions than the calling job grants, so grant the ones its file lists.
 
 On private repositories, artifact attestations are skipped, and `codeql.yml` and `dependency-review.yml` need GitHub Code Security.
+
+In the privacybydesign organization, public repositories get CodeQL through GitHub's default setup (security configuration "GitHub recommended"), so the templates leave out the `codeql` job: with default setup enabled, GitHub rejects results from a separate CodeQL workflow.
 
 ## Versioning
 
