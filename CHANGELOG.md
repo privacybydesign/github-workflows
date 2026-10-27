@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `templates/dependabot.yml`: security updates come as one grouped PR per ecosystem (`applies-to: security-updates`) instead of one PR per package. The version-update groups never applied to them.
+- Caller templates: a new push to a pull request cancels that pull request's previous Status checks run (workflow-level `concurrency`). Push, schedule and merge-queue runs are never cancelled.
 - Templates: no `codeql` job. Public repositories in the organization get CodeQL through default setup, which rejects results from `codeql.yml`.
 
 ## v1.1.3
