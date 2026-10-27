@@ -1,8 +1,8 @@
 # Copy to .github/dependabot.yml in every repository and delete the
-# ecosystems you don't use. Updates are grouped (one PR per ecosystem, and
-# one for its security updates) and
-# wait 7 days after a release (cooldown) so compromised releases are usually
-# yanked before they reach us. Security updates are not delayed.
+# ecosystems you don't use. Updates are grouped (one PR per ecosystem, plus
+# one for its security updates) and wait 7 days after a release (cooldown)
+# so compromised releases are usually yanked before they reach us. Security
+# updates are not delayed.
 version: 2
 updates:
   - package-ecosystem: github-actions # also bumps the shared workflows
