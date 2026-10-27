@@ -1,7 +1,8 @@
 # Copy to .github/dependabot.yml in every repository and delete the
-# ecosystems you don't use. Updates are grouped (one PR per ecosystem) and
-# wait 7 days after a release (cooldown) so compromised releases are usually
-# yanked before they reach us. Security updates are not delayed.
+# ecosystems you don't use. Updates are grouped (one PR per ecosystem, plus
+# one for its security updates) and wait 7 days after a release (cooldown)
+# so compromised releases are usually yanked before they reach us. Security
+# updates are not delayed.
 version: 2
 updates:
   - package-ecosystem: github-actions # also bumps the shared workflows
@@ -9,6 +10,7 @@ updates:
     schedule: { interval: weekly, day: monday }
     groups:
       actions: { patterns: ["*"] }
+      actions-security: { applies-to: security-updates, patterns: ["*"] }
     cooldown: { default-days: 7 }
 
   - package-ecosystem: docker # bumps tag AND @sha256 digest of FROM lines
@@ -23,6 +25,7 @@ updates:
     schedule: { interval: weekly, day: monday }
     groups:
       go: { patterns: ["*"], update-types: [minor, patch] }
+      go-security: { applies-to: security-updates, patterns: ["*"] }
     cooldown: { default-days: 7 }
 
   - package-ecosystem: npm
@@ -31,6 +34,7 @@ updates:
     groups:
       npm-production: { dependency-type: production, update-types: [minor, patch] }
       npm-development: { dependency-type: development, update-types: [minor, patch] }
+      npm-security: { applies-to: security-updates, patterns: ["*"] }
     cooldown: { default-days: 7 }
 
   - package-ecosystem: terraform
