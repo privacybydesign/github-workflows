@@ -53,12 +53,24 @@ jobs:
     permissions:
       contents: read
 
+  # SonarQube Cloud quality gate. Public repositories only: on a private
+  # repository it succeeds without analysing. Needs the SONAR_TOKEN secret.
+  sonarqube:
+    uses: privacybydesign/github-workflows/.github/workflows/sonarqube.yml@v1
+    permissions:
+      contents: read
+      pull-requests: read
+    secrets:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+    # with:
+    #   args: -Dsonar.exclusions=**/testdata/**
+
   # Single required check for rulesets/branch protection: job names inside this
   # workflow can change without touching the ruleset.
   passed:
     name: Status checks passed
     if: always()
-    needs: [node, docker, dependency-review, workflow-lint]
+    needs: [node, docker, dependency-review, workflow-lint, sonarqube]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions: {}

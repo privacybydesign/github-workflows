@@ -1,0 +1,122 @@
+# Reusable workflow: SonarQube Cloud analysis (code smells, bugs,
+# security hotspots, duplication) with the quality gate as a status check.
+#
+# Only runs on public repositories, where SonarQube Cloud is free. On a
+# private repository, on schedule and merge_group events, and on pull
+# requests that get no secrets (forks, Dependabot without a Dependabot
+# secret), the job succeeds without analysing, so it can sit in an
+# "all checks passed" gate.
+#
+# Setup per repository:
+#   1. Import the repository in the privacybydesign organization on
+#      sonarcloud.io and turn off Automatic Analysis (Administration >
+#      Analysis Method): SonarQube Cloud rejects CI results while it is on.
+#   2. Make SONAR_TOKEN available to the repository (organization or
+#      repository secret, and as a Dependabot secret for Dependabot PRs).
+#
+# Required caller permissions: contents: read, pull-requests: read
+# Required secret: SONAR_TOKEN
+
+name: SonarQube
+
+on:
+  workflow_call:
+    inputs:
+      organization:
+        description: SonarQube Cloud organization key.
+        type: string
+        default: privacybydesign
+      project-key:
+        description: SonarQube Cloud project key. Empty = <owner>_<repository>, the key SonarQube Cloud gives an imported repository.
+        type: string
+        default: ""
+      working-directory:
+        description: Analysis base directory (sonar.projectBaseDir).
+        type: string
+        default: .
+      args:
+        description: Extra scanner arguments, e.g. "-Dsonar.go.coverage.reportPaths=coverage.out -Dsonar.exclusions=**/testdata/**".
+        type: string
+        default: ""
+      quality-gate:
+        description: Fail the job when the quality gate fails (sonar.qualitygate.wait).
+        type: boolean
+        default: true
+      timeout-minutes:
+        type: number
+        default: 15
+    secrets:
+      SONAR_TOKEN:
+        required: false
+
+permissions: {}
+
+jobs:
+  sonarqube:
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    concurrency:
+      group: sonarqube-${{ github.workflow }}-${{ github.ref }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Decide whether to analyse
+        id: gate
+        env:
+          PRIVATE: ${{ github.event.repository.private }}
+          EVENT: ${{ github.event_name }}
+          HAS_TOKEN: ${{ secrets.SONAR_TOKEN != '' }}
+          FORK: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          run=true
+          if [ "$PRIVATE" = "true" ]; then
+            echo "::notice::Private repository: SonarQube analysis skipped."
+            run=false
+          elif [ "$EVENT" = "schedule" ] || [ "$EVENT" = "merge_group" ]; then
+            echo "SonarQube analysis does not run on $EVENT events."
+            run=false
+          elif [ "$HAS_TOKEN" != "true" ]; then
+            if [ "$EVENT" = "pull_request" ] && { [ "$FORK" = "true" ] || [ "$ACTOR" = "dependabot[bot]" ]; }; then
+              echo "::notice::No SONAR_TOKEN for this pull request (fork or Dependabot): SonarQube analysis skipped."
+              run=false
+            else
+              echo "::error::SONAR_TOKEN is not set. Add it as a secret and pass it to this workflow (secrets: SONAR_TOKEN)."
+              exit 1
+            fi
+          fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.gate.outputs.run == 'true'
+        with:
+          fetch-depth: 0 # blame information for new-code detection
+          persist-credentials: false
+
+      - name: Scanner arguments
+        if: steps.gate.outputs.run == 'true'
+        id: args
+        env:
+          ORGANIZATION: ${{ inputs.organization }}
+          PROJECT_KEY: ${{ inputs.project-key || format('{0}_{1}', github.repository_owner, github.event.repository.name) }}
+          QUALITY_GATE: ${{ inputs.quality-gate }}
+          EXTRA_ARGS: ${{ inputs.args }}
+        run: |
+          args="-Dsonar.organization=$ORGANIZATION -Dsonar.projectKey=$PROJECT_KEY"
+          if [ "$QUALITY_GATE" = "true" ]; then
+            args="$args -Dsonar.qualitygate.wait=true"
+          fi
+          if [ -n "$EXTRA_ARGS" ]; then
+            args="$args $EXTRA_ARGS"
+          fi
+          echo "args=$args" >> "$GITHUB_OUTPUT"
+
+      - uses: SonarSource/sonarqube-scan-action@4d1dc0c91ee400dcf8a6dddf2f705ac36542e304 # v8.4.0
+        if: steps.gate.outputs.run == 'true'
+        with:
+          projectBaseDir: ${{ inputs.working-directory }}
+          args: ${{ steps.args.outputs.args }}
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
