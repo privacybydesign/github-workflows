@@ -61,8 +61,12 @@ jobs:
       pull-requests: read
     secrets:
       SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-    # with:
-    #   args: -Dsonar.exclusions=**/testdata/**
+    with:
+      # Comma-separated paths SonarQube does not analyse (globs, relative to the repository root).
+      # Set them per repository with the SONAR_EXCLUSIONS variable (Settings > Secrets and
+      # variables > Actions > Variables) instead of editing this file. Without it,
+      # every run, scheduled runs included, uses the default at the end of this line.
+      exclusions: ${{ vars.SONAR_EXCLUSIONS || '**/testdata/**' }}
 
   # Single required check for rulesets/branch protection: job names inside this
   # workflow can change without touching the ruleset.

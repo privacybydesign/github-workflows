@@ -2,10 +2,11 @@
 # security hotspots, duplication) with the quality gate as a status check.
 #
 # Only runs on public repositories, where SonarQube Cloud is free. On a
-# private repository, on schedule and merge_group events, and on pull
-# requests that get no secrets (forks, Dependabot without a Dependabot
-# secret), the job succeeds without analysing, so it can sit in an
-# "all checks passed" gate.
+# private repository, on merge_group events, and on pull requests that get
+# no secrets (forks, Dependabot without a Dependabot secret), the job
+# succeeds without analysing, so it can sit in an "all checks passed" gate.
+# Scheduled runs analyse the default branch again with SonarQube Cloud's
+# current rules.
 #
 # Setup per repository:
 #   1. Import the repository in the privacybydesign organization on
@@ -34,8 +35,14 @@ on:
         description: Analysis base directory (sonar.projectBaseDir).
         type: string
         default: .
+      exclusions:
+        description: >-
+          Comma-separated paths SonarQube does not analyse (sonar.exclusions), as
+          globs relative to working-directory, e.g. "**/testdata/**,docs/**". Empty = none.
+        type: string
+        default: ""
       args:
-        description: Extra scanner arguments, e.g. "-Dsonar.go.coverage.reportPaths=coverage.out -Dsonar.exclusions=**/testdata/**".
+        description: Extra scanner arguments, e.g. "-Dsonar.go.coverage.reportPaths=coverage.out".
         type: string
         default: ""
       quality-gate:
@@ -75,7 +82,7 @@ jobs:
           if [ "$PRIVATE" = "true" ]; then
             echo "::notice::Private repository: SonarQube analysis skipped."
             run=false
-          elif [ "$EVENT" = "schedule" ] || [ "$EVENT" = "merge_group" ]; then
+          elif [ "$EVENT" = "merge_group" ]; then
             echo "SonarQube analysis does not run on $EVENT events."
             run=false
           elif [ "$HAS_TOKEN" != "true" ]; then
@@ -102,9 +109,15 @@ jobs:
           ORGANIZATION: ${{ inputs.organization }}
           PROJECT_KEY: ${{ inputs.project-key || format('{0}_{1}', github.repository_owner, github.event.repository.name) }}
           QUALITY_GATE: ${{ inputs.quality-gate }}
+          EXCLUSIONS: ${{ inputs.exclusions }}
           EXTRA_ARGS: ${{ inputs.args }}
         run: |
           args="-Dsonar.organization=$ORGANIZATION -Dsonar.projectKey=$PROJECT_KEY"
+          # Strip whitespace so "a, b" and multi-line YAML values work too.
+          exclusions=$(printf '%s' "$EXCLUSIONS" | tr -d '[:space:]')
+          if [ -n "$exclusions" ]; then
+            args="$args -Dsonar.exclusions=$exclusions"
+          fi
           if [ "$QUALITY_GATE" = "true" ]; then
             args="$args -Dsonar.qualitygate.wait=true"
           fi
