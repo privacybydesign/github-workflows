@@ -1,8 +1,10 @@
 # Reusable workflow: SonarQube Cloud analysis (code smells, bugs,
 # security hotspots, duplication) with the quality gate as a status check.
 #
-# Only runs on public repositories, where SonarQube Cloud is free. On a
-# private repository, on merge_group events, and on pull requests that get
+# Only runs on public repositories, where SonarQube Cloud is free, and only
+# on the default branch and on pull requests into the default branch. On a
+# private repository, on other branches (pushes, manual runs, pull requests
+# into another branch), on merge_group events, and on pull requests that get
 # no secrets (forks, Dependabot without a Dependabot secret), the job
 # succeeds without analysing, so it can sit in an "all checks passed" gate.
 # Scheduled runs analyse the default branch again with SonarQube Cloud's
@@ -77,6 +79,9 @@ jobs:
           HAS_TOKEN: ${{ secrets.SONAR_TOKEN != '' }}
           FORK: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
           ACTOR: ${{ github.actor }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          REF: ${{ github.ref }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
           run=true
           if [ "$PRIVATE" = "true" ]; then
@@ -84,6 +89,13 @@ jobs:
             run=false
           elif [ "$EVENT" = "merge_group" ]; then
             echo "SonarQube analysis does not run on $EVENT events."
+            run=false
+          elif [ -n "$BASE_REF" ] && [ "$BASE_REF" != "$DEFAULT_BRANCH" ]; then
+            echo "Pull request targets $BASE_REF, not the default branch ($DEFAULT_BRANCH): SonarQube analysis skipped."
+            run=false
+          elif [ -z "$BASE_REF" ] && [ "$EVENT" != "schedule" ] && [ "$REF" != "refs/heads/$DEFAULT_BRANCH" ]; then
+            # Scheduled runs always use the default branch; their payload has no repository object.
+            echo "$REF is not the default branch ($DEFAULT_BRANCH): SonarQube analysis skipped."
             run=false
           elif [ "$HAS_TOKEN" != "true" ]; then
             if [ "$EVENT" = "pull_request" ] && { [ "$FORK" = "true" ] || [ "$ACTOR" = "dependabot[bot]" ]; }; then
