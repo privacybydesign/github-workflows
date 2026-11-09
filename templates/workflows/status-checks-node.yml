@@ -53,12 +53,30 @@ jobs:
     permissions:
       contents: read
 
+  # SonarQube Cloud quality gate. Public repositories only: on a private
+  # repository it succeeds without analysing. Needs the SONAR_TOKEN secret.
+  sonarqube:
+    uses: privacybydesign/github-workflows/.github/workflows/sonarqube.yml@v1
+    permissions:
+      contents: read
+      pull-requests: read
+    secrets:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+    with:
+      # Comma-separated paths SonarQube does not analyse (globs, relative to the repository root).
+      # Set them per repository with the SONAR_EXCLUSIONS variable (Settings > Secrets and
+      # variables > Actions > Variables) instead of editing this file. Without it,
+      # every run, scheduled runs included, uses the default at the end of this line.
+      # Example: "**/generated/**,public/vendor/**"
+      exclusions: ${{ vars.SONAR_EXCLUSIONS || '' }}
+      # args: -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
+
   # Single required check for rulesets/branch protection: job names inside this
   # workflow can change without touching the ruleset.
   passed:
     name: Status checks passed
     if: always()
-    needs: [node, docker, dependency-review, workflow-lint]
+    needs: [node, docker, dependency-review, workflow-lint, sonarqube]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions: {}
