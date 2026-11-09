@@ -2,19 +2,26 @@
 # security hotspots, duplication) with the quality gate as a status check.
 #
 # Only runs on public repositories, where SonarQube Cloud is free, and only
-# on the default branch and on pull requests into the default branch. On a
-# private repository, on other branches (pushes, manual runs, pull requests
-# into another branch), on merge_group events, and on pull requests that get
-# no secrets (forks, Dependabot without a Dependabot secret), the job
+# on the default branch and on pull requests into the default branch. A
+# private repository opts in with the Actions variable
+# SONAR_SCAN_PRIVATE_REPO set to "true" (needs a paid SonarQube Cloud plan).
+# Our subscription allows 50k lines of code for private repositories, so
+# check the remaining allowance in SonarQube Cloud before opting in.
+# On a private repository without that opt-in, on other branches (pushes,
+# manual runs, pull requests into another branch), on merge_group events,
+# and on pull requests that get no secrets (forks, Dependabot without a Dependabot secret), the job
 # succeeds without analysing, so it can sit in an "all checks passed" gate.
 # Scheduled runs analyse the default branch again with SonarQube Cloud's
 # current rules.
 #
 # Setup per repository:
-#   1. Import the repository in the privacybydesign organization on
+#   1. Add the repository to "Selected repositories" of the SonarQube Cloud
+#      GitHub App (organization Settings > GitHub Apps > SonarQube Cloud >
+#      Configure); otherwise SonarQube Cloud can't see it to import it.
+#   2. Import the repository in the privacybydesign organization on
 #      sonarcloud.io and turn off Automatic Analysis (Administration >
 #      Analysis Method): SonarQube Cloud rejects CI results while it is on.
-#   2. Make SONAR_TOKEN available to the repository (organization or
+#   3. Make SONAR_TOKEN available to the repository (organization or
 #      repository secret, and as a Dependabot secret for Dependabot PRs).
 #
 # Required caller permissions: contents: read, pull-requests: read
@@ -75,6 +82,7 @@ jobs:
         id: gate
         env:
           PRIVATE: ${{ github.event.repository.private }}
+          SCAN_PRIVATE: ${{ vars.SONAR_SCAN_PRIVATE_REPO }}
           EVENT: ${{ github.event_name }}
           HAS_TOKEN: ${{ secrets.SONAR_TOKEN != '' }}
           FORK: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
@@ -84,8 +92,8 @@ jobs:
           BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
           run=true
-          if [ "$PRIVATE" = "true" ]; then
-            echo "::notice::Private repository: SonarQube analysis skipped."
+          if [ "$PRIVATE" = "true" ] && [ "$SCAN_PRIVATE" != "true" ]; then
+            echo "::notice::Private repository: SonarQube analysis skipped. Set the Actions variable SONAR_SCAN_PRIVATE_REPO to true to analyse it."
             run=false
           elif [ "$EVENT" = "merge_group" ]; then
             echo "SonarQube analysis does not run on $EVENT events."

@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- `sonarqube.yml`: new reusable workflow. SonarQube Cloud analysis that fails on a failed quality gate, for public repositories, on the default branch and pull requests into it. Private repositories, other branches, merge-queue runs, and pull requests without the `SONAR_TOKEN` secret (forks, Dependabot) succeed without analysing. Paths to leave out go in the `exclusions` input (comma-separated globs).
+- `sonarqube.yml`: new reusable workflow. SonarQube Cloud analysis that fails on a failed quality gate, for public repositories, on the default branch and pull requests into it. Private repositories opt in with the Actions variable `SONAR_SCAN_PRIVATE_REPO` set to `true`. Private repositories without it, other branches, merge-queue runs, and pull requests without the `SONAR_TOKEN` secret (forks, Dependabot) succeed without analysing. Paths to leave out go in the `exclusions` input (comma-separated globs).
 
 - `templates/dependabot.yml`: security updates come as one grouped PR per ecosystem (`applies-to: security-updates`) instead of one PR per package. The version-update groups never applied to them.
 - Caller templates: a new push to a pull request cancels that pull request's previous Status checks run (workflow-level `concurrency`). Push, schedule and merge-queue runs are never cancelled.
