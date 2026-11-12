@@ -1,7 +1,8 @@
 # Changelog
 
-## Unreleased
+## v1.2.0
 
+- Runners: every job runs on the organization variable `LINUX_RUNNER` when the calling repository can see it, else on `ubuntu-latest`. The variable is visible to private repositories only, so they use the organization's self-hosted runners and public repositories stay on GitHub-hosted runners. Deleting the variable moves every job back. The `runs-on` input of `go-checks.yml`, `node-checks.yml`, `docker-publish.yml` and `terraform.yml` now defaults to empty; a value set by the caller still wins.
 - `templates/dependabot.yml`: security updates come as one grouped PR per ecosystem (`applies-to: security-updates`) instead of one PR per package. The version-update groups never applied to them.
 - Caller templates: a new push to a pull request cancels that pull request's previous Status checks run (workflow-level `concurrency`). Push, schedule and merge-queue runs are never cancelled.
 - Templates: no `codeql` job. Public repositories in the organization get CodeQL through default setup, which rejects results from `codeql.yml`.
