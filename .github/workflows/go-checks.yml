@@ -87,8 +87,11 @@ on:
         type: boolean
         default: true
       runs-on:
+        description: >-
+          Runner label. Empty (the default) uses the organization's LINUX_RUNNER
+          variable when it is visible to the calling repository, else ubuntu-latest.
         type: string
-        default: ubuntu-latest
+        default: ""
     secrets:
       CODECOV_TOKEN:
         description: Needed for private repositories or when tokenless upload is disabled.
@@ -98,7 +101,7 @@ permissions: {}
 
 jobs:
   analyze:
-    runs-on: ${{ inputs.runs-on }}
+    runs-on: ${{ inputs.runs-on || vars.LINUX_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     concurrency:
       group: go-analyze-${{ github.workflow }}-${{ inputs.working-directory }}-${{ github.ref }}
@@ -157,7 +160,7 @@ jobs:
 
   govulncheck:
     if: inputs.govulncheck
-    runs-on: ${{ inputs.runs-on }}
+    runs-on: ${{ inputs.runs-on || vars.LINUX_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     concurrency:
       group: go-vuln-${{ github.workflow }}-${{ inputs.working-directory }}-${{ github.ref }}
@@ -194,7 +197,7 @@ jobs:
 
   test:
     if: inputs.test-dockerfile != '' || inputs.test-command != ''
-    runs-on: ${{ inputs.runs-on }}
+    runs-on: ${{ inputs.runs-on || vars.LINUX_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     concurrency:
       group: go-test-${{ github.workflow }}-${{ inputs.working-directory }}-${{ github.ref }}

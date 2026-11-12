@@ -50,6 +50,10 @@ On private repositories, artifact attestations are skipped, and `codeql.yml` and
 
 In the privacybydesign organization, public repositories get CodeQL through GitHub's default setup (security configuration "GitHub recommended"), so the templates leave out the `codeql` job: with default setup enabled, GitHub rejects results from a separate CodeQL workflow.
 
+## Runners
+
+Every job runs on `${{ vars.LINUX_RUNNER || 'ubuntu-latest' }}`. `LINUX_RUNNER` is an organization variable that holds a runner label (for example `self-hosted`) and is visible to private repositories only. Private repositories therefore use the organization's self-hosted runners, and public repositories stay on GitHub-hosted runners. To move everything back to GitHub-hosted runners, delete the variable; no repository needs to change. A `runs-on` input, where a workflow has one, overrides the variable for that caller.
+
 ## Versioning
 
 Releases are semver tags (`v1.2.0`) with a moving major tag (`v1`), so a release reaches every caller without a change in each repository; breaking changes get a new major. Only maintainers can move `v1`, and changes are tried from a canary repository first. Third-party actions in these workflows are pinned to commit SHAs and kept up to date by Dependabot. See [CHANGELOG.md](CHANGELOG.md).

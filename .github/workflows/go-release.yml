@@ -88,7 +88,7 @@ permissions: {}
 
 jobs:
   prepare:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LINUX_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 10
     permissions:
       contents: read
@@ -144,7 +144,7 @@ jobs:
 
   build:
     needs: prepare
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LINUX_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     permissions:
       contents: read
@@ -194,7 +194,7 @@ jobs:
   sbom:
     needs: prepare
     if: inputs.sbom
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LINUX_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     permissions:
       contents: read
@@ -221,7 +221,7 @@ jobs:
   publish:
     needs: [prepare, build, sbom]
     if: ${{ !cancelled() && needs.prepare.outputs.mode != 'build' && needs.build.result == 'success' && needs.sbom.result != 'failure' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LINUX_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 15
     permissions:
       contents: write

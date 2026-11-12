@@ -59,7 +59,7 @@ jobs:
     name: Status checks passed
     if: always()
     needs: [node, docker, dependency-review, workflow-lint]
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LINUX_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 5
     permissions: {}
     steps:

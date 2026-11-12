@@ -44,14 +44,17 @@ on:
         type: boolean
         default: false
       runs-on:
+        description: >-
+          Runner label. Empty (the default) uses the organization's LINUX_RUNNER
+          variable when it is visible to the calling repository, else ubuntu-latest.
         type: string
-        default: ubuntu-latest
+        default: ""
 
 permissions: {}
 
 jobs:
   checks:
-    runs-on: ${{ inputs.runs-on }}
+    runs-on: ${{ inputs.runs-on || vars.LINUX_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     concurrency:
       group: node-${{ github.workflow }}-${{ inputs.working-directory }}-${{ github.ref }}
