@@ -115,9 +115,11 @@ on:
         type: number
         default: 60
       runs-on:
-        description: Runner label.
+        description: >-
+          Runner label. Empty (the default) uses the organization's LINUX_RUNNER
+          variable when it is visible to the calling repository, else ubuntu-latest.
         type: string
-        default: ubuntu-latest
+        default: ""
     secrets:
       DOCKER_BUILD_ARGS:
         description: >-
@@ -148,7 +150,7 @@ permissions: {}
 
 jobs:
   docker:
-    runs-on: ${{ inputs.runs-on }}
+    runs-on: ${{ inputs.runs-on || vars.LINUX_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     permissions:
       contents: read

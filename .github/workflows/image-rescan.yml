@@ -38,7 +38,7 @@ permissions: {}
 
 jobs:
   resolve:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LINUX_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 10
     permissions:
       contents: read
@@ -98,7 +98,7 @@ jobs:
     needs: resolve
     if: needs.resolve.outputs.empty != 'true'
     name: scan (${{ matrix.tag }}, ${{ matrix.platform }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LINUX_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     permissions:
       contents: read

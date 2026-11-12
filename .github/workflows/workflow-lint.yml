@@ -40,7 +40,7 @@ permissions: {}
 
 jobs:
   lint:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LINUX_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     concurrency:
       group: workflow-lint-${{ github.workflow }}-${{ github.ref }}
