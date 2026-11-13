@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.3.0
+
+- `docker-publish.yml`: two inputs for repositories that release more than one thing. Both are empty by default, so existing callers are unchanged.
+  - `tag-prefix`: only a tag or release that starts with the prefix publishes the image, and the version is the rest of the tag (`website-v1.2.0` with `tag-prefix: website-` gives `:1.2.0`). A tag without the prefix is built and scanned but not pushed. `:latest` goes to the highest stable version among the tags that carry the prefix.
+  - `version`: a version the caller read from a manifest, published alongside `:edge` on a default-branch push. It is published once: an existing `:<version>` is left where it is.
+
 ## v1.2.0
 
 - Runners: every job runs on the organization variable `LINUX_RUNNER` when the calling repository can see it, else on `ubuntu-latest`. The variable is visible to private repositories only, so they use the organization's self-hosted runners and public repositories stay on GitHub-hosted runners. Deleting the variable moves every job back. The `runs-on` input of `go-checks.yml`, `node-checks.yml`, `docker-publish.yml` and `terraform.yml` now defaults to empty; a value set by the caller still wins.
