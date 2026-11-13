@@ -22,6 +22,10 @@
 #   push of a v* tag   same as a release (use this with immutable/draft releases)
 #   workflow_dispatch  build + scan + push :<branch-name> (+ :edge when run on the default branch HEAD)
 #
+# Monorepos (v1.3): `tag-prefix` limits releases of an image to tags that start
+# with that prefix and takes the version from the rest (`website-v1.2.0`), and
+# `version` publishes a version read from a manifest alongside :edge, once.
+#
 # v1.1 additions: `push-image: false` (check-only mode for Status checks),
 # release commits must be on the default branch, Dockerfile build checks,
 # base-image digest pinning check, reproducible images (SOURCE_DATE_EPOCH),
@@ -61,6 +65,22 @@ on:
         description: Comma-separated platforms, e.g. linux/amd64,linux/arm64.
         type: string
         default: linux/amd64
+      tag-prefix:
+        description: >-
+          For repositories that release more than one thing. Only a tag or release
+          that starts with this prefix publishes this image, and the version is the
+          rest of the tag: `website-v1.2.0` with `tag-prefix: website-` gives :1.2.0.
+          Any other tag is built and scanned but not pushed.
+        type: string
+        default: ""
+      version:
+        description: >-
+          Version to publish alongside :edge on a default-branch push, for callers
+          that read it from a manifest instead of a tag. Published once: when
+          :<version> already exists it is left alone, so the tag stays on the first
+          default-branch commit that carried that version.
+        type: string
+        default: ""
       tag-latest:
         description: Also tag :latest when publishing the latest stable GitHub release.
         type: boolean
@@ -210,6 +230,8 @@ jobs:
           INPUT_PLATFORMS: ${{ inputs.platforms }}
           INPUT_DOCKERFILE: ${{ inputs.dockerfile }}
           INPUT_CONTEXT: ${{ inputs.context }}
+          TAG_PREFIX: ${{ inputs.tag-prefix }}
+          INPUT_VERSION: ${{ inputs.version }}
           REPO: ${{ github.repository }}
           EVENT: ${{ github.event_name }}
           REF: ${{ github.ref }}
@@ -224,17 +246,35 @@ jobs:
           image="${INPUT_IMAGE:-ghcr.io/${REPO}}"
           image="$(echo "$image" | tr '[:upper:]' '[:lower:]')"
 
-          publish=false; is_head=false; is_latest=false
+          publish=false; is_head=false; is_latest=false; version=""; version_tag=""
+
+          # With a tag-prefix, a tag that does not carry it belongs to something
+          # else in the repository: build and scan, publish nothing.
+          release_version() {
+            if [[ "$1" != "$TAG_PREFIX"* ]]; then
+              echo "::notice::Tag $1 does not start with '${TAG_PREFIX}'; not a release of this image." >&2
+              return 1
+            fi
+            echo "${1#"$TAG_PREFIX"}"
+          }
+          # The highest stable version among the tags that carry the prefix.
+          highest_version() {
+            gh api "repos/${REPO}/tags" --paginate --jq '.[].name' \
+              | { grep -F -- "$TAG_PREFIX" || true; } \
+              | while IFS= read -r t; do [[ "$t" == "$TAG_PREFIX"* ]] && echo "${t#"$TAG_PREFIX"}"; done \
+              | { grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' || true; } | sort -V | tail -1
+          }
+
           case "$EVENT" in
             push)
               if [[ "$REF" == refs/tags/* ]]; then
                 # Tag push is treated like a published release (draft/immutable release flows).
                 tag="${REF#refs/tags/}"
-                publish=true
-                if [[ "$tag" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-                  highest="$(gh api "repos/${REPO}/tags" --paginate --jq '.[].name' \
-                    | grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1 || true)"
-                  [ "$highest" = "$tag" ] && is_latest=true
+                if version="$(release_version "$tag")"; then
+                  publish=true
+                  if [[ "$version" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                    [ "$(highest_version)" = "$version" ] && is_latest=true
+                  fi
                 fi
               elif [ "$REF" = "refs/heads/${DEFAULT_BRANCH}" ]; then
                 head="$(gh api "repos/${REPO}/commits/${DEFAULT_BRANCH}" --jq .sha)"
@@ -242,10 +282,17 @@ jobs:
                 else echo "::notice::${SHA} is no longer HEAD of ${DEFAULT_BRANCH}; not tagging edge."; fi
               fi ;;
             release)
-              publish=true
-              if [ "$RELEASE_PRERELEASE" != "true" ]; then
-                latest="$(gh release view --repo "$REPO" --json tagName --jq .tagName || true)"
-                [ "$latest" = "$RELEASE_TAG" ] && is_latest=true
+              if version="$(release_version "$RELEASE_TAG")"; then
+                publish=true
+                if [ "$RELEASE_PRERELEASE" != "true" ]; then
+                  if [ -n "$TAG_PREFIX" ]; then
+                    # The repository's latest release may be of something else.
+                    [ "$(highest_version)" = "$version" ] && is_latest=true
+                  else
+                    latest="$(gh release view --repo "$REPO" --json tagName --jq .tagName || true)"
+                    [ "$latest" = "$RELEASE_TAG" ] && is_latest=true
+                  fi
+                fi
               fi ;;
             workflow_dispatch)
               publish=true
@@ -269,6 +316,20 @@ jobs:
 
           if [ "$PUSH_IMAGE" != true ]; then publish=false; is_head=false; is_latest=false; fi
 
+          # A version from the caller goes out with :edge, and only once: an
+          # existing :<version> is never moved to a later commit.
+          if [ -n "$INPUT_VERSION" ] && [ "$publish" = true ] && [ "$is_head" = true ] && [ "$EVENT" = push ]; then
+            code="$(curl -s -o /dev/null -w '%{http_code}' \
+              -H "Authorization: Bearer $(printf '%s' "$GH_TOKEN" | base64 -w0)" \
+              -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' \
+              "https://ghcr.io/v2/${image#ghcr.io/}/manifests/${INPUT_VERSION}")"
+            case "$code" in
+              404) version_tag="$INPUT_VERSION" ;;
+              200) echo "::notice::${image}:${INPUT_VERSION} already exists; not moving it." ;;
+              *) echo "::error::Could not tell whether ${image}:${INPUT_VERSION} exists (HTTP ${code})."; exit 1 ;;
+            esac
+          fi
+
           # Local (non-publishing) builds can only load a single platform.
           first_platform="$(echo "$INPUT_PLATFORMS" | cut -d, -f1 | tr -d ' ')"
           multi_arch=false
@@ -281,6 +342,8 @@ jobs:
             echo "publish=$publish"
             echo "is-head=$is_head"
             echo "is-latest=$is_latest"
+            echo "version=$version"
+            echo "version-tag=$version_tag"
             echo "first-platform=$first_platform"
             echo "multi-arch=$multi_arch"
           } >> "$GITHUB_OUTPUT"
@@ -294,9 +357,10 @@ jobs:
           flavor: latest=false
           # {{major}}/{{major}}.{{minor}} are skipped automatically for pre-releases.
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}},enable=${{ inputs.tag-semver-rollups }}
-            type=semver,pattern={{major}},enable=${{ inputs.tag-semver-rollups }}
+            type=semver,pattern={{version}},value=${{ steps.prepare.outputs.version }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ steps.prepare.outputs.version }},enable=${{ inputs.tag-semver-rollups }}
+            type=semver,pattern={{major}},value=${{ steps.prepare.outputs.version }},enable=${{ inputs.tag-semver-rollups }}
+            type=raw,value=${{ steps.prepare.outputs.version-tag }},enable=${{ steps.prepare.outputs.version-tag != '' }}
             type=raw,value=latest,enable=${{ inputs.tag-latest && steps.prepare.outputs.is-latest == 'true' }}
             type=edge,enable=${{ steps.prepare.outputs.is-head == 'true' }}
             type=ref,event=branch,enable=${{ github.event_name == 'workflow_dispatch' }}
