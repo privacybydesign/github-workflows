@@ -16,6 +16,7 @@ Reusable GitHub Actions workflows for the [privacybydesign](https://github.com/p
 | `terraform.yml` | fmt, validate, tflint, Checkov, plan and apply |
 | `codeql.yml` | CodeQL for Go, JavaScript/TypeScript and workflow files, for repositories without CodeQL default setup |
 | `dependency-review.yml` | Blocks pull requests that add vulnerable or disallowed-licence dependencies |
+| `sonarqube.yml` | SonarQube Cloud analysis with the quality gate as a check, on public repositories |
 | `workflow-lint.yml` | actionlint and zizmor |
 | `pr-title.yml` | Checks that pull request titles follow Conventional Commits |
 | `release-please.yml` | Release pull requests and GitHub releases |
@@ -47,6 +48,8 @@ Open a pull request with these files. It runs the new status checks itself, so i
 The inputs of each workflow are documented in its file, under `on.workflow_call.inputs`. A reusable workflow gets no more permissions than the calling job grants, so grant the ones its file lists.
 
 On private repositories, artifact attestations are skipped, and `codeql.yml` and `dependency-review.yml` need GitHub Code Security.
+
+The Status checks templates include a `sonarqube` job. On a public repository it needs the `SONAR_TOKEN` secret, the repository imported in the privacybydesign organization on [SonarQube Cloud](https://sonarcloud.io), and Automatic Analysis turned off there. Don't forget to add the repository to `Selected repositories` of the SonarQube Cloud GitHub App (organization Settings > GitHub Apps > SonarQube Cloud > Configure), or SonarQube Cloud can't import it. The job then fails when the quality gate fails. It only analyses the default branch and pull requests into the default branch; runs on other branches succeed without analysing. On a private repository it succeeds without analysing, so you can keep or remove it, unless you set the Actions variable `SONAR_SCAN_PRIVATE_REPO` to `true` in the repository: then it analyses the private repository too (this needs a paid SonarQube Cloud plan). Our subscription allows 50k lines of code for private repositories, so check the remaining allowance in SonarQube Cloud before you opt in. Pull requests without access to the secret (forks, Dependabot without a Dependabot secret) skip the analysis. To leave paths out of the analysis without editing the template, set the Actions variable `SONAR_EXCLUSIONS` in the repository to comma-separated globs (for example `**/testdata/**,docs/**`); it replaces the template default, which every run uses otherwise, scheduled runs included.
 
 In the privacybydesign organization, public repositories get CodeQL through GitHub's default setup (security configuration "GitHub recommended"), so the templates leave out the `codeql` job: with default setup enabled, GitHub rejects results from a separate CodeQL workflow.
 

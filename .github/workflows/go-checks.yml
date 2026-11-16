@@ -55,8 +55,9 @@ on:
       test-command:
         description: Test command run natively. Ignored when test-dockerfile is set. Empty disables native tests.
         type: string
-        default: go test -race -coverprofile=coverage.out ./...
-      # Set coverage-file: coverage.out to collect it.
+        # -json writes test results for SonarQube (report.json); tee keeps them in the log.
+        default: go test -race -json -coverprofile=coverage.out ./... | tee report.json
+      # Set coverage-file: coverage.out (and test-report-file: report.json) to collect them.
       test-dockerfile:
         description: If set, tests run as `docker build -f <file> . && docker run <image>` from the repository root.
         type: string
@@ -72,10 +73,20 @@ on:
           from the runner (Dockerfile.test images write to /coverage/coverage.out).
         type: string
         default: ""
+      test-report-file:
+        description: >-
+          `go test -json` output to collect next to the coverage file (e.g. for
+          SonarQube). Same path rules as coverage-file. Empty = none.
+        type: string
+        default: ""
       upload-coverage:
-        description: Upload the coverage file as a workflow artifact.
+        description: Upload the coverage file and test report as a workflow artifact.
         type: boolean
         default: false
+      coverage-artifact-name:
+        description: Name of the uploaded artifact. Must be unique per workflow run.
+        type: string
+        default: coverage
       codecov:
         description: Upload the coverage file to Codecov.
         type: boolean
@@ -215,16 +226,24 @@ jobs:
         env:
           DOCKERFILE: ${{ inputs.test-dockerfile }}
           COVERAGE_FILE: ${{ inputs.coverage-file }}
+          TEST_REPORT_FILE: ${{ inputs.test-report-file }}
         run: |
           set -euo pipefail
           docker build --tag ci-tests --file "$DOCKERFILE" .
           args=(--rm)
-          if [ -n "$COVERAGE_FILE" ]; then
-            host_dir="$RUNNER_TEMP/coverage"
+          host_dir="$RUNNER_TEMP/coverage"
+          mounted=()
+          # Bind-mount the directory of each file to collect; both share one host directory.
+          for output in coverage:"$COVERAGE_FILE" report:"$TEST_REPORT_FILE"; do
+            key="${output%%:*}"; file="${output#*:}"
+            [ -n "$file" ] || continue
             mkdir -p "$host_dir"; chmod 777 "$host_dir"
-            args+=(-v "$host_dir:$(dirname "$COVERAGE_FILE")")
-            echo "coverage=$host_dir/$(basename "$COVERAGE_FILE")" >> "$GITHUB_OUTPUT"
-          fi
+            dir="$(dirname "$file")"
+            if [[ ! " ${mounted[*]} " == *" $dir "* ]]; then
+              args+=(-v "$host_dir:$dir"); mounted+=("$dir")
+            fi
+            echo "$key=$host_dir/$(basename "$file")" >> "$GITHUB_OUTPUT"
+          done
           docker run "${args[@]}" ci-tests
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -249,18 +268,37 @@ jobs:
         env:
           TEST_COMMAND: ${{ inputs.test-command }}
           COVERAGE_FILE: ${{ inputs.coverage-file }}
+          TEST_REPORT_FILE: ${{ inputs.test-report-file }}
           WD: ${{ inputs.working-directory }}
         run: |
           bash -euo pipefail -c "$TEST_COMMAND"
           [ -n "$COVERAGE_FILE" ] && echo "coverage=$WD/$COVERAGE_FILE" >> "$GITHUB_OUTPUT"
+          [ -n "$TEST_REPORT_FILE" ] && echo "report=$WD/$TEST_REPORT_FILE" >> "$GITHUB_OUTPUT"
           true
 
+      - name: Collect test output
+        id: test-output
+        if: inputs.upload-coverage
+        env:
+          COVERAGE: ${{ steps.container-test.outputs.coverage || steps.native-test.outputs.coverage }}
+          REPORT: ${{ steps.container-test.outputs.report || steps.native-test.outputs.report }}
+        run: |
+          {
+            echo 'files<<EOF'
+            for f in "$COVERAGE" "$REPORT"; do
+              if [ -n "$f" ]; then echo "$f"; fi
+            done
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
+
+      # Files keep their paths relative to their common directory, so a
+      # download into the working directory puts them back where they were.
       - name: Upload coverage artifact
-        if: inputs.upload-coverage && (steps.container-test.outputs.coverage || steps.native-test.outputs.coverage)
+        if: inputs.upload-coverage && steps.test-output.outputs.files != ''
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: coverage
-          path: ${{ steps.container-test.outputs.coverage || steps.native-test.outputs.coverage }}
+          name: ${{ inputs.coverage-artifact-name }}
+          path: ${{ steps.test-output.outputs.files }}
           if-no-files-found: error
 
       - name: Upload coverage to Codecov

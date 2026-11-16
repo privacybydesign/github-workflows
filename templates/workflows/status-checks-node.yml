@@ -28,6 +28,11 @@ jobs:
       scripts: lint test build
       ignore-scripts: true # block dependency install scripts
       # allowed-scripts: esbuild
+      # Coverage for the sonarqube job (artifact "coverage"). The test script must
+      # write it: Jest `--coverage` (lcov is a default reporter), Vitest `--coverage`
+      # with `coverage.reporter: ['lcov']`.
+      coverage-file: coverage/lcov.info
+      upload-coverage: true
 
   # Build + scan the image on PRs without pushing. Remove if there is no Dockerfile.
   docker:
@@ -53,12 +58,30 @@ jobs:
     permissions:
       contents: read
 
+  # SonarQube Cloud quality gate. Public repositories only: on a private
+  # repository it succeeds without analysing. Needs the SONAR_TOKEN secret.
+  sonarqube:
+    needs: node # waits for the coverage artifact
+    uses: privacybydesign/github-workflows/.github/workflows/sonarqube.yml@v1
+    permissions:
+      contents: read
+      pull-requests: read
+    secrets:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+    with:
+      coverage-artifact: coverage
+      exclusions: ${{ vars.SONAR_EXCLUSIONS || 'dist/**,coverage/**' }}
+      args: >-
+        -Dsonar.tests=.
+        -Dsonar.test.inclusions=**/*.test.*,**/*.spec.*,**/__tests__/**
+        -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
+
   # Single required check for rulesets/branch protection: job names inside this
   # workflow can change without touching the ruleset.
   passed:
     name: Status checks passed
     if: always()
-    needs: [node, docker, dependency-review, workflow-lint]
+    needs: [node, docker, dependency-review, workflow-lint, sonarqube]
     runs-on: ${{ vars.LINUX_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 5
     permissions: {}

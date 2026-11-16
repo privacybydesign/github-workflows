@@ -25,6 +25,10 @@ jobs:
       contents: read
     with:
       working-directory: .
+      # Coverage and test results for the sonarqube job (artifact "coverage").
+      coverage-file: coverage.out
+      test-report-file: report.json
+      upload-coverage: true
       # test-dockerfile: Dockerfile.test
       # apt-packages: libpcsclite-dev
 
@@ -52,12 +56,36 @@ jobs:
     permissions:
       contents: read
 
+  # SonarQube Cloud quality gate. Public repositories only: on a private
+  # repository it succeeds without analysing. Needs the SONAR_TOKEN secret.
+  sonarqube:
+    needs: go # waits for the coverage artifact
+    uses: privacybydesign/github-workflows/.github/workflows/sonarqube.yml@v1
+    permissions:
+      contents: read
+      pull-requests: read
+    secrets:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+    with:
+      coverage-artifact: coverage
+      exclusions: ${{ vars.SONAR_EXCLUSIONS || '**/*_test.go,**/vendor/**,**/testdata/**' }}
+      args: >-
+        -Dsonar.tests=.
+        -Dsonar.test.inclusions=**/*_test.go
+        -Dsonar.go.tests.reportPaths=report.json
+        -Dsonar.go.coverage.reportPaths=coverage.out
+        -Dsonar.issue.ignore.multicriteria=e1,e2
+        -Dsonar.issue.ignore.multicriteria.e1.ruleKey=go:S3776
+        -Dsonar.issue.ignore.multicriteria.e1.resourceKey=**/*_test.go
+        -Dsonar.issue.ignore.multicriteria.e2.ruleKey=go:S107
+        -Dsonar.issue.ignore.multicriteria.e2.resourceKey=**/fuzz_test.go
+
   # Single required check for rulesets/branch protection: job names inside this
   # workflow can change without touching the ruleset.
   passed:
     name: Status checks passed
     if: always()
-    needs: [go, docker, dependency-review, workflow-lint]
+    needs: [go, docker, dependency-review, workflow-lint, sonarqube]
     runs-on: ${{ vars.LINUX_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 5
     permissions: {}

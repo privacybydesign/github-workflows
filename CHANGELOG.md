@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- `sonarqube.yml`: new reusable workflow. SonarQube Cloud analysis that fails on a failed quality gate, for public repositories, on the default branch and pull requests into it. Private repositories opt in with the Actions variable `SONAR_SCAN_PRIVATE_REPO` set to `true`. Private repositories without it, other branches, merge-queue runs, and pull requests without the `SONAR_TOKEN` secret (forks, Dependabot) succeed without analysing. Paths to leave out go in the `exclusions` input (comma-separated globs).
+
 ## v1.3.0
 
 - `docker-publish.yml`: two inputs for repositories that release more than one thing. Both are empty by default, so existing callers are unchanged.
