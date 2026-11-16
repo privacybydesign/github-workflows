@@ -4,6 +4,15 @@
 
 - `sonarqube.yml`: new reusable workflow. SonarQube Cloud analysis that fails on a failed quality gate, for public repositories, on the default branch and pull requests into it. Private repositories opt in with the Actions variable `SONAR_SCAN_PRIVATE_REPO` set to `true`. Private repositories without it, other branches, merge-queue runs, and pull requests without the `SONAR_TOKEN` secret (forks, Dependabot) succeed without analysing. Paths to leave out go in the `exclusions` input (comma-separated globs).
 
+## v1.3.0
+
+- `docker-publish.yml`: two inputs for repositories that release more than one thing. Both are empty by default, so existing callers are unchanged.
+  - `tag-prefix`: only a tag or release that starts with the prefix publishes the image, and the version is the rest of the tag (`website-v1.2.0` with `tag-prefix: website-` gives `:1.2.0`). A tag without the prefix is built and scanned but not pushed. `:latest` goes to the highest stable version among the tags that carry the prefix.
+  - `version`: a version the caller read from a manifest, published alongside `:edge` on a default-branch push. It is published once: an existing `:<version>` is left where it is.
+
+## v1.2.0
+
+- Runners: every job runs on the organization variable `LINUX_RUNNER` when the calling repository can see it, else on `ubuntu-latest`. The variable is visible to private repositories only, so they use the organization's self-hosted runners and public repositories stay on GitHub-hosted runners. Deleting the variable moves every job back. The `runs-on` input of `go-checks.yml`, `node-checks.yml`, `docker-publish.yml` and `terraform.yml` now defaults to empty; a value set by the caller still wins.
 - `templates/dependabot.yml`: security updates come as one grouped PR per ecosystem (`applies-to: security-updates`) instead of one PR per package. The version-update groups never applied to them.
 - Caller templates: a new push to a pull request cancels that pull request's previous Status checks run (workflow-level `concurrency`). Push, schedule and merge-queue runs are never cancelled.
 - Templates: no `codeql` job. Public repositories in the organization get CodeQL through default setup, which rejects results from `codeql.yml`.

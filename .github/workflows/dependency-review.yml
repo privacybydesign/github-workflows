@@ -41,7 +41,7 @@ permissions: {}
 
 jobs:
   dependency-review:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.LINUX_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 10
     permissions:
       contents: read
