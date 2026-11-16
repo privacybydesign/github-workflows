@@ -54,6 +54,13 @@ on:
         description: Extra scanner arguments, e.g. "-Dsonar.go.coverage.reportPaths=coverage.out".
         type: string
         default: ""
+      coverage-artifact:
+        description: >-
+          Artifact from an earlier job in the same run (coverage, test reports) to
+          download into working-directory before analysing; the calling job needs
+          `needs:` on that job. Empty = none.
+        type: string
+        default: ""
       quality-gate:
         description: Fail the job when the quality gate fails (sonar.qualitygate.wait).
         type: boolean
@@ -121,6 +128,12 @@ jobs:
         with:
           fetch-depth: 0 # blame information for new-code detection
           persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: steps.gate.outputs.run == 'true' && inputs.coverage-artifact != ''
+        with:
+          name: ${{ inputs.coverage-artifact }}
+          path: ${{ inputs.working-directory }}
 
       - name: Scanner arguments
         if: steps.gate.outputs.run == 'true'

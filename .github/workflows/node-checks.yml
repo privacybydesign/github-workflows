@@ -43,6 +43,22 @@ on:
         description: Run a dependency audit (high and above fails).
         type: boolean
         default: false
+      coverage-file:
+        description: >-
+          Coverage report the scripts write, relative to working-directory (e.g.
+          coverage/lcov.info for SonarQube). Collected only with upload-coverage.
+        type: string
+        default: ""
+      upload-coverage:
+        description: >-
+          Upload coverage-file as a workflow artifact, keeping its path relative to
+          working-directory. Fails when the scripts did not write it.
+        type: boolean
+        default: false
+      coverage-artifact-name:
+        description: Name of the uploaded artifact. Must be unique per workflow run.
+        type: string
+        default: coverage
       runs-on:
         type: string
         default: ubuntu-latest
@@ -138,3 +154,29 @@ jobs:
               echo "::notice::Script '$s' not defined in $(pwd)/package.json, skipping."
             fi
           done
+
+      # Stage the file under its relative path: upload-artifact stores a single
+      # file by its bare name, which would turn coverage/lcov.info into lcov.info.
+      - name: Collect coverage
+        id: coverage
+        if: inputs.upload-coverage && inputs.coverage-file != ''
+        env:
+          COVERAGE_FILE: ${{ inputs.coverage-file }}
+        run: |
+          set -euo pipefail
+          if [ ! -f "$COVERAGE_FILE" ]; then
+            echo "::error::$COVERAGE_FILE not found in $(pwd). Make the test script write it (Jest: --coverage; Vitest: --coverage with the lcov reporter)."
+            exit 1
+          fi
+          staging="$RUNNER_TEMP/coverage-artifact"
+          mkdir -p "$staging/$(dirname "$COVERAGE_FILE")"
+          cp "$COVERAGE_FILE" "$staging/$COVERAGE_FILE"
+          echo "dir=$staging" >> "$GITHUB_OUTPUT"
+
+      - name: Upload coverage artifact
+        if: steps.coverage.outputs.dir != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ inputs.coverage-artifact-name }}
+          path: ${{ steps.coverage.outputs.dir }}
+          if-no-files-found: error
